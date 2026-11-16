@@ -1,0 +1,69 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Large dataset caches / temp files (keep README and structure)
+*.mp4
+*.avi
+*.mov
+!results/samples/*.mp4
+
+# Dataset images (Keep 329MB dataset local-only, preserve README and folder structure)
+dataset/Train/
+dataset/Validation/
+dataset/Test/
+dataset/with_mask/
+dataset/without_mask/
+dataset/raw/
+dataset/*.jpg
+dataset/*.png
+!dataset/README.md
+!dataset/**/.gitkeep
+*.zip
+.cache/
+kaggle/
+
+# Test & coverage caches
+.pytest_cache/
+.coverage
+htmlcov/

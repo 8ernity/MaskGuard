@@ -1,0 +1,33 @@
+{
+    "model_name": "MaskGuard_Custom_CNN",
+    "input_dimensions": [
+        128,
+        128,
+        3
+    ],
+    "color_space": "RGB",
+    "normalization": "pixel_val / 255.0 (range [0.0, 1.0])",
+    "output_activation": "sigmoid",
+    "output_interpretation": {
+        "0": "with_mask (probability close to 0)",
+        "1": "without_mask (probability close to 1)"
+    },
+    "class_mapping": {
+        "0": "with_mask",
+        "1": "without_mask"
+    },
+    "default_threshold": 0.5,
+    "uncertainty_band": [
+        0.4,
+        0.6
+    ],
+    "training_metrics": {
+        "final_train_accuracy": 0.952,
+        "final_val_accuracy": 0.9356,
+        "epochs_trained": 6,
+        "batch_size": 32,
+        "train_samples": 11202,
+        "val_samples": 590,
+        "test_samples": 992
+    }
+}
