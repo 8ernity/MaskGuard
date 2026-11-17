@@ -114,9 +114,9 @@ function updateSliderFill(slider, val) {
   const max = parseFloat(slider.max) || 100;
   const rawVal = val !== undefined ? parseFloat(val) : (parseFloat(slider.value) || 0);
   const pct = Math.max(0, Math.min(100, ((rawVal - min) / (max - min)) * 100));
-  // Exact geometric alignment to circular thumb center (thumb width 22px, radius 11px)
-  const offsetCalc = `calc(11px + (100% - 22px) * ${(pct / 100).toFixed(4)})`;
-  slider.style.background = `linear-gradient(to right, #946af4 0%, #946af4 ${offsetCalc}, #e2e8f0 ${offsetCalc}, #e2e8f0 100%)`;
+  // Exact geometric alignment to circular clay thumb center (thumb width 24px, radius 12px)
+  const offsetCalc = `calc(12px + (100% - 24px) * ${(pct / 100).toFixed(4)})`;
+  slider.style.background = `linear-gradient(to right, #8054f7 0%, #8054f7 ${offsetCalc}, #e2e8f0 ${offsetCalc}, #e2e8f0 100%)`;
 }
 
 // --- Live Camera Controls ---
@@ -335,13 +335,18 @@ function drawDetections(ctx, detections) {
   ctx.save();
   for (const d of detections) {
     const [x, y, w, h] = d.box;
-    const isMask = d.label === "MASK";
-    const strokeColor = isMask ? "#10b981" : "#ef4444"; // Emerald green vs Coral Red
+    const isUncertain = d.is_uncertain || d.label === "UNCERTAIN";
+    const isMask = d.label === "MASK" && !isUncertain;
+    const strokeColor = isUncertain ? "#f59e0b" : isMask ? "#10b981" : "#ef4444";
 
     // Sleek rounded bounding box
     ctx.lineWidth = 3;
     ctx.strokeStyle = strokeColor;
-    ctx.shadowColor = isMask ? "rgba(16, 185, 129, 0.45)" : "rgba(239, 68, 68, 0.45)";
+    ctx.shadowColor = isUncertain
+      ? "rgba(245, 158, 11, 0.45)"
+      : isMask
+      ? "rgba(16, 185, 129, 0.45)"
+      : "rgba(239, 68, 68, 0.45)";
     ctx.shadowBlur = 8;
 
     const radius = 10;

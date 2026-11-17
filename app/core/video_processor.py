@@ -34,6 +34,7 @@ def process_video_file(
     output_path: Path | str,
     pipeline: InferencePipeline,
     progress_callback: Optional[Callable[[int, int, float], None]] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """
     Pure Python headless video processor for web API and background tasks.
@@ -80,6 +81,9 @@ def process_video_file(
 
     try:
         while True:
+            if cancel_check and cancel_check():
+                break
+
             ret, frame = cap.read()
             if not ret or frame is None:
                 break

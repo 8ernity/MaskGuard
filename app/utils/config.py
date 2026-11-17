@@ -57,11 +57,16 @@ class AppConfig:
         return cls(**filtered)
 
     def save(self, filepath: Path | str | None = None) -> None:
-        """Persist current configuration to JSON."""
+        """Persist current configuration to JSON atomically."""
+        import os
+        import tempfile
         target = Path(filepath) if filepath else get_config_path()
         target.parent.mkdir(parents=True, exist_ok=True)
-        with open(target, "w", encoding="utf-8") as f:
-            json.dump(self.to_dict(), f, indent=4)
+        # Atomic write to temporary file on same filesystem prevents partial file corruption
+        with tempfile.NamedTemporaryFile("w", dir=target.parent, delete=False, encoding="utf-8") as tf:
+            json.dump(self.to_dict(), tf, indent=4)
+            temp_name = tf.name
+        os.replace(temp_name, target)
 
     @classmethod
     def load(cls, filepath: Path | str | None = None) -> AppConfig:

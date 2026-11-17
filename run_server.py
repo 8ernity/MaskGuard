@@ -53,16 +53,24 @@ def main() -> None:
 
     model_path = get_default_model_path()
     if not model_path.exists():
-        print("[!] Pre-trained model not found. Generating initial dataset and training...")
-        from training.prepare_dataset import bootstrap_synthetic_dataset
-        from training.train import train_pipeline
-        bootstrap_synthetic_dataset(samples_per_class=150)
-        train_pipeline(epochs=15, batch_size=32)
+        print(f"[!] Pre-trained model not found at: {model_path}")
+        print("[!] To train the custom CNN with the official Kaggle dataset, run:")
+        print("      python training/train.py")
+        print("[!] MaskGuard will start in standby mode (inference endpoints will return 503 until model is present).\n")
+
+    import socket
+    port = 8000
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        if s.connect_ex(("127.0.0.1", 8000)) == 0:
+            port = 8001
+            print(f"[*] Port 8000 in use by another service. Switching to port {port}...")
+
+    target_url = f"http://localhost:{port}"
 
     # Launch browser opener in daemon thread
     browser_thread = threading.Thread(
         target=_launch_browser_when_ready,
-        args=("http://localhost:8000", 35),
+        args=(target_url, 35),
         daemon=True,
     )
     browser_thread.start()
@@ -70,14 +78,14 @@ def main() -> None:
     print("=====================================================================")
     print("       MaskGuard — AI-Powered Face Mask Detection System")
     print("=====================================================================")
-    print("  -> Web Dashboard:  http://localhost:8000")
-    print("  -> API Health:     http://localhost:8000/api/status")
-    print("  -> API Docs:       http://localhost:8000/docs")
+    print(f"  -> Web Dashboard:  {target_url}")
+    print(f"  -> API Health:     {target_url}/api/status")
+    print(f"  -> API Docs:       {target_url}/docs")
     print("  -> Press CTRL+C in this terminal to stop the server.")
     print("=====================================================================\n")
 
     import uvicorn
-    uvicorn.run("app.web.server:app", host="127.0.0.1", port=8000, log_level="info")
+    uvicorn.run("app.web.server:app", host="127.0.0.1", port=port, log_level="info")
 
 
 if __name__ == "__main__":
