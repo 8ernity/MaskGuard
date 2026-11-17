@@ -1,350 +1,525 @@
-# MaskGuard — AI-Powered Face Mask Detection System
+<div align="center">
 
-[![Python Version](https://img.shields.io/badge/Python-3.11-blue.svg)](https://www.python.org/)
-[![Deep Learning](https://img.shields.io/badge/Framework-TensorFlow%20%7C%20Keras-orange.svg)](https://www.tensorflow.org/)
-[![Computer Vision](https://img.shields.io/badge/Vision-OpenCV-green.svg)](https://opencv.org/)
-[![GUI](https://img.shields.io/badge/Desktop%20UI-PySide6%20(Qt6)-emerald.svg)](https://wiki.qt.io/Qt_for_Python)
-[![Architecture](https://img.shields.io/badge/Model-Custom%20CNN%20(No%20YOLO)-purple.svg)](#cnn-model-architecture)
+  <img src="app/web/static/img/logo.png" width="130" alt="MaskGuard Logo" style="border-radius: 28px; box-shadow: 0 10px 30px rgba(99, 102, 241, 0.3); margin-bottom: 14px;" />
 
-> **MaskGuard** is an industrial-grade, production-quality Computer Vision and Deep Learning desktop application designed for automated human face mask compliance monitoring. Built from scratch with a custom Convolutional Neural Network (CNN) in TensorFlow/Keras, OpenCV vision pipelines, and a modern emerald-and-charcoal PySide6 desktop interface.
+  # MaskGuard
+  ### Autonomous Real-Time Face Mask Compliance & Deep Learning Vision Platform
 
----
+  <p>
+    <strong>Industrial-grade Computer Vision and Deep Learning system designed for automated human face mask compliance monitoring. Powered by a custom 3-block Convolutional Neural Network (CNN) trained from scratch on 11,792 faces from Kaggle, integrated with OpenCV real-time video processing pipelines, dual-boundary uncertainty calibration, and a claymorphic dashboard interface.</strong>
+  </p>
 
-## 1. Project Overview & Problem Statement
+  <p>
+    Built with Python 3.11, TensorFlow 2.19, OpenCV 4.10, FastAPI, PySide6 (Qt6), and Tailwind CSS v3.
+  </p>
 
-Public health emergencies and sterile operational facilities (such as hospitals, cleanrooms, and food-processing plants) require strict adherence to face mask regulations. Manual monitoring by human personnel is labor-intensive, costly, prone to fatigue, and exposes personnel to direct airborne contamination risks.
+  <p>
+    <a href="https://github.com/8ernity/MaskGuard"><img src="https://img.shields.io/badge/Status-Production_Ready-success?style=for-the-badge&logo=shield" alt="Status" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" alt="License" /></a>
+    <a href="https://www.tensorflow.org"><img src="https://img.shields.io/badge/Framework-TensorFlow_2.19-FF6F00?style=for-the-badge&logo=tensorflow&logoColor=white" alt="TensorFlow" /></a>
+    <a href="https://opencv.org"><img src="https://img.shields.io/badge/Vision-OpenCV_4.10-5C3EE8?style=for-the-badge&logo=opencv&logoColor=white" alt="OpenCV" /></a>
+    <a href="https://fastapi.tiangolo.com"><img src="https://img.shields.io/badge/Backend-FastAPI_0.110+-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI" /></a>
+    <a href="https://www.python.org"><img src="https://img.shields.io/badge/Language-Python_3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" /></a>
+    <a href="https://www.kaggle.com"><img src="https://img.shields.io/badge/Dataset-Kaggle_~12K_Images-20BEFF?style=for-the-badge&logo=kaggle&logoColor=white" alt="Kaggle Dataset" /></a>
+    <a href="#-empirical-evaluation--verified-confusion-matrix"><img src="https://img.shields.io/badge/Test_Accuracy-94.15%25-10B981?style=for-the-badge" alt="Test Accuracy" /></a>
+  </p>
 
-**MaskGuard** automates this workflow by decoupling computer vision into two complementary, high-efficiency stages:
-1. **Face Localization (OpenCV):** Locates human faces rapidly across static images, video streams, or real-time webcam feeds using OpenCV's frontal face cascades with adaptive boundary padding.
-2. **Mask Classification (Custom CNN):** Standardizes, normalizes, and feeds the cropped facial patches into a custom 3-block Convolutional Neural Network to classify each face as **`MASK`**, **`NO MASK`**, or **`UNCERTAIN`**.
+</div>
 
-### Strict Academic & Engineering Compliance
-- **No Pretrained Object Detectors:** Explicitly avoids YOLO, Ultralytics, SSD, or pretrained black-box detection models.
-- **Custom CNN Architecture:** Trained genuinely from scratch using TensorFlow and Keras.
-- **Model Deliverable:** Genuine, verified `.h5` model with companion `class_mapping.json` and `model_metadata.json`.
-- **Offline & Local Execution:** Fully functional offline without external cloud dependencies or telemetry tracking.
-
----
-
-## 2. Key Features
-
-- **Real-Time Webcam Inference:** Multi-threaded video streaming powered by a dedicated `QThread` worker. Renders smooth 30+ FPS feeds with dynamic HUD, colored bounding boxes, and confidence score tags.
-- **Multi-Face Detection:** Simultaneously detects and classifies multiple individuals in a single frame.
-- **Uncertainty Calibration:** Highlights ambiguous detections with an amber **`UNCERTAIN`** label when model confidence falls below user-configured safety thresholds.
-- **Image Analysis Suite:** Drag-and-drop or file upload for JPG, JPEG, and PNG images with coordinate breakdown tables and one-click annotated image export.
-- **Offline Video Processor:** Frame-by-frame batch processor for MP4 and AVI video files with preview rendering, progress tracking, cooperative cancellation, and annotated video rendering.
-- **Model Analytics Dashboard:** Displays publication-quality loss/accuracy learning curves, confusion matrix heatmaps, precision, recall, F1 scores, and layer specifications.
-- **Modern Desktop UI:** Built in PySide6 with an emerald-accented dark charcoal theme, responsive card layouts, and optional light mode.
-- **Standalone CLI Utility:** Includes `scripts/webcam_demo.py` for headless or command-line demonstrations without launching the Qt desktop window.
+> [!NOTE]
+> **MaskGuard** is an edge-optimized AI vision solution engineered for compliance verification in healthcare facilities, sterile cleanrooms, commercial transport hubs, and high-density industrial workspaces. Unlike legacy approaches reliant on bloated pretrained object detectors (such as YOLO or SSD), MaskGuard utilizes a **decoupled two-stage architecture**: an ultra-lightweight Haar Cascade face locator coupled with a custom, mathematically regularized 3-block CNN classifier. The entire pipeline operates deterministically offline at 30+ FPS on edge CPU/GPU architectures.
 
 ---
 
-## 3. System Architecture
+## 📋 Table of Contents
 
-```text
-+-----------------------------------------------------------------------------------+
-|                                MASKGUARD SYSTEM                                    |
-+-----------------------------------------------------------------------------------+
-                                          |
-                +-------------------------+-------------------------+
-                |                         |                         |
-        [Live Webcam Feed]        [Static Image File]       [Offline Video File]
-                |                         |                         |
-                +-------------------------+-------------------------+
-                                          |
-                                          v
-                      +---------------------------------------+
-                      |         OpenCV Face Detector          |
-                      |  (Frontal Face Cascade + Exp. Margin) |
-                      +---------------------------------------+
-                                          |
-                                          | Face Bounding Boxes: (x, y, w, h)
-                                          v
-                      +---------------------------------------+
-                      |       Image Preprocessing Unit        |
-                      |   - BGR -> RGB Color Space            |
-                      |   - Resize to 128 x 128 Pixels        |
-                      |   - Min-Max Normalization [0.0, 1.0]  |
-                      +---------------------------------------+
-                                          |
-                                          | Normalized Tensor: (N, 128, 128, 3)
-                                          v
-                      +---------------------------------------+
-                      |       Custom CNN Classifier Head      |
-                      |       (TensorFlow / Keras .h5)        |
-                      +---------------------------------------+
-                                          |
-                                          | Sigmoid Output Probability: P ∈ [0, 1]
-                                          v
-                      +---------------------------------------+
-                      |     Calibration & Decision Logic      |
-                      |   - P < 0.50  --> MASK (1 - P)        |
-                      |   - P >= 0.50 --> NO MASK (P)         |
-                      |   - Ambiguous --> UNCERTAIN (< Conf)  |
-                      +---------------------------------------+
-                                          |
-                                          v
-                      +---------------------------------------+
-                      |       PySide6 Presentation Layer      |
-                      |   - Green / Red / Amber HUD Badges    |
-                      |   - Centroid Tracker & Statistics     |
-                      |   - Real-Time FPS HUD                 |
-                      +---------------------------------------+
+- [✨ Key Platform Capabilities](#-key-platform-capabilities)
+- [📊 Kaggle ~12K Dataset & Data Hygiene Engineering](#-kaggle-12k-dataset--data-hygiene-engineering)
+- [📐 Mathematical Foundations & Deep Learning Formulations](#-mathematical-foundations--deep-learning-formulations)
+- [📈 Empirical Evaluation & Verified Confusion Matrix](#-empirical-evaluation--verified-confusion-matrix)
+- [🏗️ System Architecture & Data Pipelines](#️-system-architecture--data-pipelines)
+- [🔬 Custom CNN Architecture Specification](#-custom-cnn-architecture-specification)
+- [🔌 Comprehensive REST API Reference](#-comprehensive-rest-api-reference)
+- [🛠️ Tech Stack Matrix](#️-tech-stack-matrix)
+- [🚀 Quickstart & Installation](#-quickstart--installation)
+- [🧪 Automated Verification Test Suite](#-automated-verification-test-suite)
+- [📁 Repository Directory Structure](#-repository-directory-structure)
+- [⚖️ Ethics, Privacy & License](#️-ethics-privacy--license)
+
+---
+
+## ✨ Key Platform Capabilities
+
+| Capability | Technical Description | Architectural Core |
+|---|---|---|
+| ⚡ **Real-Time Webcam Inference** | Processes live video feeds at 30+ FPS, rendering dynamic green (`MASK`), red (`NO MASK`), and amber (`UNCERTAIN`) HUD bounding boxes with sub-millisecond drawing overlays. | OpenCV VideoCapture + NumPy Tensor Batching |
+| 🛡️ **Zero YOLO / No Black-Box Models** | Built strictly from scratch using an idiomatic 3-block CNN with Batch Normalization, Dropout, and Global Average Pooling to ensure 100% academic compliance and lightweight deployment. | Custom Keras Model (`training/model_architecture.py`) |
+| 📐 **Aspect-Preserving Symmetrical RoI** | Centers detected face bounding boxes and applies uniform square expansion ($1:1$ aspect ratio) matching the training data distribution, preventing throat/collar distortion. | OpenCV Haar Cascade + Dynamic Square Pad |
+| 🎯 **Dual-Boundary Uncertainty Engine** | Implements an uncertainty buffer $\delta = 0.10$ around the decision threshold $\tau = 0.50$ to flag borderline face crops, occlusion, or motion blur as `UNCERTAIN`. | Calibrated Sigmoid Activation |
+| 📊 **Full Kaggle ~12K Model Training** | Trained across the complete 11,792 Kaggle dataset images with stratified validation and held-out test splits, achieving **94.15% test accuracy**. | tf.data / Keras Sequence + Data Augmentation |
+| 🌐 **Tactile Claymorphic Web UI** | Modern web dashboard featuring physical claymorphic containers, soft pillowy action buttons, macOS control dots, and fixed non-scrollable left sidebar. | FastAPI + Uvicorn + Tailwind CSS v3 |
+| 🖥️ **PySide6 Native Desktop App** | High-performance standalone desktop GUI with dedicated QThread worker threads for image drop, offline batch video processing, and analytics curves. | PySide6 (Qt6 Core, Widgets, GUI) |
+| 💻 **Turnkey OpenCV Terminal CLI** | Dedicated standalone script (`detect_mask_webcam.py`) for instantaneous webcam testing and academic evaluation without web server dependencies. | Pure OpenCV + TensorFlow `.h5` |
+
+---
+
+## 📊 Kaggle ~12K Dataset & Data Hygiene Engineering
+
+MaskGuard is trained on the comprehensive **Face Mask Detection ~12K Images Dataset** (Kaggle, 329 MB), consisting of **11,792 total human face crops** captured under diverse lighting conditions, angles, ethnic backgrounds, and mask varieties (surgical, N95, cloth, patterned).
+
+```mermaid
+flowchart TD
+    classDef rootStyle fill:#4F46E5,stroke:#3730A3,stroke-width:2px,color:#FFFFFF,font-weight:bold
+    classDef trainStyle fill:#0EA5E9,stroke:#0284C7,stroke-width:2px,color:#FFFFFF,font-weight:bold
+    classDef valStyle fill:#10B981,stroke:#059669,stroke-width:2px,color:#FFFFFF,font-weight:bold
+    classDef testStyle fill:#F59E0B,stroke:#D97706,stroke-width:2px,color:#FFFFFF,font-weight:bold
+
+    Kaggle["Kaggle 12K Dataset (11,792 Images)"]:::rootStyle
+    Kaggle --> Train["Training Corpus: 10,210 Images"]:::trainStyle
+    Kaggle --> Val["Validation Set: 590 Images"]:::valStyle
+    Kaggle --> Test["Official Held-out Test: 992 Images"]:::testStyle
+
+    Train --> T_Mask["WithMask: ~5,100"]
+    Train --> T_NoMask["WithoutMask: ~5,110"]
+    Val --> V_Mask["WithMask: 295"]
+    Val --> V_NoMask["WithoutMask: 295"]
+    Test --> Te_Mask["WithMask: 483"]
+    Test --> Te_NoMask["WithoutMask: 509"]
+```
+
+### Dataset Partitioning & Class Distribution
+
+| Split Partition | Class: WithMask (0) | Class: WithoutMask (1) | Total Images | Purpose |
+|---|:---:|:---:|:---:|---|
+| **Training Split** | 5,102 | 5,100 | **10,202** | Stochastic gradient optimization & feature learning |
+| **Validation Split** | 295 | 295 | **590** | Checkpoint gating, learning rate decay, early stopping |
+| **Test Split (Held-out)** | 483 | 509 | **992** | Unseen empirical benchmark & confusion matrix verification |
+| **Total Corpus** | **5,880** | **5,904** | **11,792** | **Strictly Balanced (1.00 : 1.00 Class Ratio)** |
+
+### Rigorous Data Hygiene Protocols
+
+1. **Strict Exclusion via `.gitignore`:** The entire 329 MB raw dataset directory (`dataset/Train/`, `dataset/Validation/`, `dataset/Test/`) and temporary preprocessing caches (`.cache/`) are strictly untracked to keep git repositories clean and lightweight.
+2. **Aspect Ratio Preservation:** Kaggle face chips exhibit native dimensions ranging from $25 \times 25$ to $168 \times 168$ with a $1:1$ square aspect ratio. The preprocessing pipeline enforces uniform square bounding box expansion rather than anisotropic scaling to eliminate facial distortion.
+3. **Photometric Color Space Alignment:** OpenCV reads frame buffers in **BGR** order, whereas TensorFlow models expect **RGB**. The pipeline explicitly performs `cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)` prior to tensor normalization to eliminate inverted channel degradation.
+4. **On-the-Fly Stochastic Augmentation:** Training pipelines utilize affine transformations to minimize overfitting without increasing disk storage:
+   - Random horizontal flips ($p = 0.50$)
+   - Micro-rotations: $\theta \in [-12^\circ, +12^\circ]$
+   - Sub-pixel bilinear zoom: scale factor $s \in [0.92, 1.08]$
+   - Contrast/Brightness jitter: $\Delta I \in [-15\%, +15\%]$
+
+---
+
+## 📐 Mathematical Foundations & Deep Learning Formulations
+
+The MaskGuard inference and classification engines are grounded in classical statistical signal processing and modern convolutional neural network theory.
+
+### 1. 2D Spatial Convolution & Receptive Field
+
+For an input activation volume $\mathbf{X} \in \mathbb{R}^{H \times W \times C_{\text{in}}}$ convolved with a filter kernel bank $\mathbf{K} \in \mathbb{R}^{k_h \times k_w \times C_{\text{in}} \times C_{\text{out}}}$:
+
+$$\mathbf{S}_{i,j,m} = \sum_{c=1}^{C_{\text{in}}} \sum_{u=1}^{k_h} \sum_{v=1}^{k_w} \mathbf{X}_{i+u-1, \, j+v-1, \, c} \cdot \mathbf{K}_{u,v,c,m}$$
+
+The spatial dimension of each consecutive feature map is governed by:
+
+$$O = \left\lfloor \frac{W - k_w + 2P}{S} \right\rfloor + 1$$
+
+*where $P=1$ (same-padding), $S=1$ (stride), and kernel size $k_w = k_h = 3$, maintaining spatial resolution until $2 \times 2$ Max Pooling stages.*
+
+### 2. Batch Normalization Dynamics
+
+To mitigate internal covariate shift across training epochs, each mini-batch $\mathcal{B} = \{x_{1 \dots m}\}$ undergoes feature normalization and learnable affine transformation:
+
+$$\mu_{\mathcal{B}} = \frac{1}{m} \sum_{i=1}^m x_i, \qquad \sigma_{\mathcal{B}}^2 = \frac{1}{m} \sum_{i=1}^m (x_i - \mu_{\mathcal{B}})^2$$
+
+$$\hat{x}_i = \frac{x_i - \mu_{\mathcal{B}}}{\sqrt{\sigma_{\mathcal{B}}^2 + \epsilon}}, \qquad y_i = \gamma \hat{x}_i + \beta$$
+
+*where $\gamma$ and $\beta$ are learnable scale and shift parameters, and $\epsilon = 10^{-5}$ guarantees numerical stability.*
+
+### 3. Global Average Pooling (GAP)
+
+Rather than flattening multi-dimensional feature tensors into dense layers—which introduces millions of redundant parameters—MaskGuard applies Global Average Pooling across the final spatial maps ($16 \times 16 \times 128$):
+
+$$z_c = \frac{1}{H \times W} \sum_{i=1}^H \sum_{j=1}^W \mathbf{F}_{i,j,c}, \qquad \forall c \in \{1 \dots 128\}$$
+
+*This compresses 32,768 spatial elements into a robust 128-dimensional feature embedding invariant to localized spatial translations.*
+
+### 4. Binary Cross-Entropy Objective Function
+
+The binary cross-entropy loss function optimized during model convergence:
+
+$$\mathcal{L}_{\text{BCE}}(\mathbf{y}, \hat{\mathbf{y}}) = -\frac{1}{N} \sum_{i=1}^N \left[ y_i \ln(\hat{y}_i) + (1 - y_i) \ln(1 - \hat{y}_i) \right]$$
+
+*where $y_i \in \{0, 1\}$ represents ground truth ($0 = \text{WithMask}$, $1 = \text{WithoutMask}$), and $\hat{y}_i = \sigma(z)$ denotes the sigmoid posterior probability.*
+
+### 5. Calibrated Sigmoid Activation & Uncertainty Decision Logic
+
+$$\hat{y} = \sigma(z) = \frac{1}{1 + e^{-z}}$$
+
+The inference pipeline calibrates class dominance and flags ambiguous boundaries using an uncertainty margin $\delta = 0.10$:
+
+$$\text{Class}(\hat{y}) = \begin{cases} 
+\text{MASK}, & \text{if } \hat{y} < 0.50 - \delta \\
+\text{UNCERTAIN}, & \text{if } 0.50 - \delta \le \hat{y} \le 0.50 + \delta \\
+\text{NO MASK}, & \text{if } \hat{y} > 0.50 + \delta 
+\end{cases}$$
+
+$$\text{Confidence}(\hat{y}) = \begin{cases} 
+(1 - \hat{y}) \times 100\%, & \text{if } \hat{y} < 0.50 \\
+\hat{y} \times 100\%, & \text{if } \hat{y} \ge 0.50
+\end{cases}$$
+
+### 6. Statistical Metric Formulations
+
+$$\text{Accuracy} = \frac{TP + TN}{TP + TN + FP + FN}, \qquad \text{Precision} = \frac{TP}{TP + FP}$$
+
+$$\text{Recall} = \frac{TP}{TP + FN}, \qquad F_1\text{-Score} = 2 \times \frac{\text{Precision} \times \text{Recall}}{\text{Precision} + \text{Recall}}$$
+
+---
+
+## 📈 Empirical Evaluation & Verified Confusion Matrix
+
+The genuine custom CNN (`models/mask_detector.h5`) was evaluated on the official, held-out **992 test images** from the Kaggle dataset.
+
+### Verified Confusion Matrix (992 Test Samples)
+
+```
+                       PREDICTED
+                 Mask (0)   No Mask (1)
+ACTUAL  Mask (0)    435          48      | 483 Actual Mask
+     No Mask (1)     10         499      | 509 Actual No Mask
+                 ------------------------
+                    445         547      | 992 Total Test Faces
+```
+
+| Actual \ Predicted | Predicted: MASK (0) | Predicted: NO MASK (1) | Support | Recall (Sensitivity) | Precision | F1-Score |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Class 0: WithMask** | **435** (TP) | 48 (FN) | 483 | **90.06%** | **97.75%** | **93.75%** |
+| **Class 1: WithoutMask** | 10 (FP) | **499** (TN) | 509 | **98.04%** | **91.22%** | **94.51%** |
+| **Summary / Overall** | **445** | **547** | **992** | **94.05%** (Macro) | **94.49%** (Macro) | **94.15% (Accuracy)** |
+
+> [!IMPORTANT]
+> **Key Safety Attribute:** The model delivers a remarkable **98.04% Recall on `WithoutMask` faces** (499 / 509 unmasked faces detected correctly). In high-risk public safety and sterile healthcare applications, this minimizes false negatives, ensuring that individuals without masks are captured with near-perfect reliability.
+
+### Visualized Empirical Curves & Heatmaps
+
+<div align="center">
+  <table>
+    <tr>
+      <td align="center"><strong>Normalized Confusion Matrix Heatmap</strong></td>
+      <td align="center"><strong>Training & Validation Learning Curves</strong></td>
+    </tr>
+    <tr>
+      <td><img src="results/confusion_matrix.png" width="440" alt="Confusion Matrix" /></td>
+      <td><img src="results/training_curves.png" width="440" alt="Learning Curves" /></td>
+    </tr>
+  </table>
+</div>
+
+---
+
+## 🏗️ System Architecture & Data Pipelines
+
+MaskGuard executes through a synchronized multi-stage pipeline designed for low latency and zero memory leaks.
+
+```mermaid
+flowchart TD
+    classDef inputStyle fill:#4F46E5,stroke:#3730A3,stroke-width:2px,color:#FFFFFF,font-weight:bold
+    classDef visionStyle fill:#0EA5E9,stroke:#0284C7,stroke-width:2px,color:#FFFFFF,font-weight:bold
+    classDef cnnStyle fill:#10B981,stroke:#059669,stroke-width:2px,color:#FFFFFF,font-weight:bold
+    classDef outputStyle fill:#8B5CF6,stroke:#6D28D9,stroke-width:2px,color:#FFFFFF,font-weight:bold
+
+    subgraph INGESTION["Input Stream Interfaces"]
+        W["Live Webcam Stream"]:::inputStyle
+        I["Static Image Upload"]:::inputStyle
+        V["Recorded Video File"]:::inputStyle
+    end
+
+    subgraph OPENCV["Stage 1: Face Detection & RoI Normalization"]
+        W & I & V --> Gray["Grayscale & Histogram Equalization"]:::visionStyle
+        Gray --> Cascade["OpenCV Haar Frontal Face Cascade"]:::visionStyle
+        Cascade --> RoI["Square 1:1 Aspect Expansion (pad=0.08)"]:::visionStyle
+        RoI --> Norm["Color Alignment (BGR -> RGB) & Scale [0, 1]"]:::visionStyle
+    end
+
+    subgraph CNN["Stage 2: Custom CNN Inference Head"]
+        Norm --> Tensor["Batch Tensor Input: (N, 128, 128, 3)"]:::cnnStyle
+        Tensor --> Model["MaskGuard 3-Block CNN (.h5 Model)"]:::cnnStyle
+        Model --> Sigmoid["Sigmoid Posterior: P(y) ∈ [0, 1]"]:::cnnStyle
+        Sigmoid --> Logic["Uncertainty Gating (δ = 0.10)"]:::cnnStyle
+    end
+
+    subgraph DISPATCH["Stage 3: Multi-Platform Presentation"]
+        Logic --> Web["Claymorphic Web Dashboard (FastAPI/Canvas)"]:::outputStyle
+        Logic --> Desktop["PySide6 Desktop Application (QThread)"]:::outputStyle
+        Logic --> CLI["Standalone OpenCV Runner (detect_mask_webcam.py)"]:::outputStyle
+    end
 ```
 
 ---
 
-## 4. CNN Model Architecture
+## 🔬 Custom CNN Architecture Specification
 
-The custom Convolutional Neural Network consists of 3 convolutional feature extraction blocks followed by Global Average Pooling, dense representation, and a calibrated Sigmoid classifier:
+The custom Convolutional Neural Network consists of **110,561 total parameters** structured across 3 convolutional feature extraction blocks followed by Global Average Pooling and a dense regularized classification head.
 
-```text
-INPUT IMAGE: (128 × 128 × 3) — RGB Normalized [0, 1]
-  │
-  ├─► CONV2D: 32 filters, 3×3 kernel, padding='same', use_bias=False
-  ├─► BATCH NORMALIZATION
-  ├─► RELU ACTIVATION
-  └─► MAX POOLING: 2×2 pool size (Output: 64 × 64 × 32)
-  │
-  ├─► CONV2D: 64 filters, 3×3 kernel, padding='same', use_bias=False
-  ├─► BATCH NORMALIZATION
-  ├─► RELU ACTIVATION
-  └─► MAX POOLING: 2×2 pool size (Output: 32 × 32 × 64)
-  │
-  ├─► CONV2D: 128 filters, 3×3 kernel, padding='same', use_bias=False
-  ├─► BATCH NORMALIZATION
-  ├─► RELU ACTIVATION
-  └─► MAX POOLING: 2×2 pool size (Output: 16 × 16 × 128)
-  │
-  ├─► GLOBAL AVERAGE POOLING 2D (Output: 128 feature vector)
-  ├─► DENSE: 128 units, ReLU activation
-  ├─► DROPOUT: 0.50 rate (Regularization against overfitting)
-  └─► DENSE: 1 unit, Sigmoid activation (Output: Binary probability [0, 1])
+```mermaid
+flowchart LR
+    classDef layerStyle fill:#F3F4F6,stroke:#94A3B8,stroke-width:1.5px,color:#1E293B,font-weight:bold
+    classDef headStyle fill:#EEF2FF,stroke:#6366F1,stroke-width:2px,color:#312E81,font-weight:bold
+
+    In["Input<br/>128x128x3"]:::layerStyle --> B1["Block 1<br/>Conv 3x3 (32)<br/>BN + ReLU + MaxPool"]:::layerStyle
+    B1 --> B2["Block 2<br/>Conv 3x3 (64)<br/>BN + ReLU + MaxPool"]:::layerStyle
+    B2 --> B3["Block 3<br/>Conv 3x3 (128)<br/>BN + ReLU + MaxPool"]:::layerStyle
+    B3 --> GAP["Global Average Pooling<br/>128-dim Vector"]:::headStyle
+    GAP --> D1["Dense (128, ReLU)<br/>Dropout (0.50)"]:::headStyle
+    D1 --> Out["Sigmoid Output<br/>1-dim Probability"]:::headStyle
 ```
 
-### Architectural Rationale
-1. **Batch Normalization** stabilizes activations, mitigates internal covariate shift, and accelerates gradient descent.
-2. **Global Average Pooling (GAP)** reduces total parameter count from ~2.5 million down to 110,561 parameters compared to traditional Flatten layers, drastically cutting compute latency for 30+ FPS edge inference while avoiding spatial overfitting.
-3. **Dropout (0.50)** randomly zeros out 50% of dense activations during training, enforcing distributed feature representation.
+### Complete Layer Breakdown Table
 
-### Training Configuration
-- **Optimizer:** Adam (Initial $\alpha = 0.001$)
-- **Loss Function:** Binary Crossentropy:
-  $$\mathcal{L} = -\frac{1}{N}\sum_{i=1}^{N} \left[ y_i \log(\hat{y}_i) + (1 - y_i) \log(1 - \hat{y}_i) \right]$$
-- **Callbacks:** `EarlyStopping(patience=6, restore_best_weights=True)`, `ReduceLROnPlateau(factor=0.5, patience=3)`, `ModelCheckpoint`
-- **Class Mapping:** `0 = with_mask`, `1 = without_mask`
+| Layer # | Layer Name | Layer Type | Output Feature Shape | Kernel / Stride | Activation | Parameters |
+|:---:|---|---|:---:|:---:|:---:|:---:|
+| 0 | `input_image` | InputLayer | `(None, 128, 128, 3)` | — | — | 0 |
+| 1 | `conv1` | Conv2D | `(None, 128, 128, 32)` | $3 \times 3$, $S=1$, Same | None | 864 |
+| 2 | `bn1` | BatchNormalization | `(None, 128, 128, 32)` | — | — | 128 |
+| 3 | `relu1` | Activation | `(None, 128, 128, 32)` | — | ReLU | 0 |
+| 4 | `pool1` | MaxPooling2D | `(None, 64, 64, 32)` | $2 \times 2$, $S=2$ | — | 0 |
+| 5 | `conv2` | Conv2D | `(None, 64, 64, 64)` | $3 \times 3$, $S=1$, Same | None | 18,432 |
+| 6 | `bn2` | BatchNormalization | `(None, 64, 64, 64)` | — | — | 256 |
+| 7 | `relu2` | Activation | `(None, 64, 64, 64)` | — | ReLU | 0 |
+| 8 | `pool2` | MaxPooling2D | `(None, 32, 32, 64)` | $2 \times 2$, $S=2$ | — | 0 |
+| 9 | `conv3` | Conv2D | `(None, 32, 32, 128)` | $3 \times 3$, $S=1$, Same | None | 73,728 |
+| 10 | `bn3` | BatchNormalization | `(None, 32, 32, 128)` | — | — | 512 |
+| 11 | `relu3` | Activation | `(None, 32, 32, 128)` | — | ReLU | 0 |
+| 12 | `pool3` | MaxPooling2D | `(None, 16, 16, 128)` | $2 \times 2$, $S=2$ | — | 0 |
+| 13 | `gap` | GlobalAveragePooling2D | `(None, 128)` | Spatial Mean | — | 0 |
+| 14 | `dense128` | Dense | `(None, 128)` | Full Connection | ReLU | 16,512 |
+| 15 | `dropout0.5` | Dropout | `(None, 128)` | $p = 0.50$ | — | 0 |
+| 16 | `output` | Dense | `(None, 1)` | Full Connection | Sigmoid | 129 |
+| **Total** | **MaskGuard_CNN** | **Sequential** | — | — | — | **110,561 (1.36 MB)** |
+
+* **Trainable Parameters:** 110,113 (430.13 KB)
+* **Non-trainable Parameters:** 448 (1.75 KB — Batch Normalization moving statistics)
 
 ---
 
-## 5. Project Structure
+## 🔌 Comprehensive REST API Reference
 
-```text
-FaceMaskDetection/
-│
-├── app/
-│   ├── __init__.py
-│   ├── main.py                     # GUI bootstrap and application lifecycle
-│   │
-│   ├── ui/                         # PySide6 Presentation Layer
-│   │   ├── __init__.py
-│   │   ├── main_window.py          # Master window, sidebar navigation, stacked views
-│   │   ├── dashboard.py            # Real-time telemetry, model readiness, quick actions
-│   │   ├── live_detection.py       # Live webcam viewport, start/stop, HUD, snapshot
-│   │   ├── image_analysis.py       # Static image drag-and-drop & multi-face analysis
-│   │   ├── video_analysis.py       # Batch video file processing & export
-│   │   ├── model_analytics.py      # Confusion matrix, accuracy curves, architecture
-│   │   ├── settings.py             # Hardware configuration, thresholds, theme toggles
-│   │   └── styles.py               # Emerald/Charcoal Dark and Light QSS stylesheets
-│   │
-│   ├── core/                       # Computer Vision & Inference Core
-│   │   ├── __init__.py
-│   │   ├── face_detector.py        # OpenCV face localization with adaptive padding
-│   │   ├── mask_classifier.py      # Preprocessing, forward pass, confidence calibration
-│   │   ├── inference_pipeline.py   # Unified pipeline, centroid tracking, drawing
-│   │   ├── camera_worker.py        # QThread worker for responsive camera streaming
-│   │   ├── video_processor.py      # Background sequential video frame encoder
-│   │   └── assets/                 # Bundled OpenCV XML cascade files
-│   │
-│   └── utils/                      # Helper Utilities
-│       ├── __init__.py
-│       ├── config.py               # Persistent AppConfig (settings.json)
-│       ├── image_utils.py          # BGR/RGB conversion, Qt pixmaps, HUD badges
-│       └── resource_paths.py       # Deterministic path resolver
-│
-├── training/                       # Deep Learning Pipeline
-│   ├── __init__.py
-│   ├── model_architecture.py       # Custom CNN definition and metadata export
-│   ├── prepare_dataset.py          # Validation, stratified splitting, augmentation
-│   ├── train.py                    # Training loop, callbacks, genuine .h5 export
-│   └── evaluate.py                 # Evaluation suite, confusion matrix, metric plots
-│
-├── scripts/
-│   └── webcam_demo.py              # Standalone OpenCV CLI webcam detection script
-│
-├── models/
-│   ├── README.md                   # Model artifact specifications
-│   ├── mask_detector.h5            # Genuine trained custom CNN model
-│   ├── class_mapping.json          # Index-to-label dictionary
-│   └── model_metadata.json         # Input dimensions, color space, hyperparameters
-│
-├── dataset/
-│   ├── README.md                   # Dataset ingestion documentation
-│   ├── with_mask/                  # Images of individuals wearing masks
-│   └── without_mask/               # Images of individuals without masks
-│
-├── results/                        # Generated Reports & Exported Media
-│   ├── evaluation_metrics.json     # Test accuracy, precision, recall, F1 summary
-│   ├── classification_report.txt   # Detailed scikit-learn report
-│   ├── confusion_matrix.png        # Seaborn heatmap
-│   ├── training_curves.png         # Loss and accuracy plots
-│   ├── screenshots/                # Captured live detection snapshots
-│   └── videos/                     # Exported annotated video files
-│
-├── tests/                          # Automated Verification Suite
-│   ├── test_preprocessing.py       # Image validation, conversions, augmentations
-│   ├── test_model.py               # Architecture shapes, forward pass, .h5 reload
-│   └── test_inference.py           # Face detection, tracker, multi-face pipeline
-│
-├── requirements.txt                # Pinned production dependencies
-├── settings.json                   # User preferences cache
-├── .gitignore                      # Git exclusion rules
-├── README.md                       # Comprehensive system documentation
-└── main.py                         # Root execution entry point
-```
+MaskGuard exposes a production-ready asynchronous ASGI REST API via FastAPI on port 8000.
 
----
+### 1. `GET /api/status`
+Returns real-time engine health, active model specifications, parameter counts, and current configuration.
 
-## 6. Installation & Execution Guide
-
-### One-Click Launch (Windows `start.bat`)
-Like ORION, MaskGuard includes a turnkey `start.bat` script that verifies the environment, ensures model weights are present, launches the FastAPI web server on `http://127.0.0.1:8000`, and opens your default web browser automatically:
-
-```cmd
-# Double-click start.bat in Windows Explorer, or run in PowerShell / CMD:
-.\start.bat
-```
-*Your browser will automatically open to `http://localhost:8000` with direct browser webcam access, image analysis, video frame processing, model analytics, and settings.*
-
-```cmd
-# Optional direct flags for training / evaluation / tests:
-.\start.bat eval      # Run Model Evaluation
-.\start.bat train     # Retrain Custom CNN Model
-.\start.bat test      # Run Pytest Test Suite
-```
-
----
-
-### Manual Setup & Execution
-
-#### Prerequisites
-- **Operating System:** Windows 10/11, macOS, or Linux
-- **Python:** Python 3.11 (Recommended)
-
-### Step 1: Create Virtual Environment
 ```bash
+curl http://localhost:8000/api/status
+```
+
+```json
+{
+  "status": "ready",
+  "model_loaded": true,
+  "model_file": "mask_detector.h5",
+  "architecture": "Custom 3-Block CNN",
+  "total_parameters": 110561,
+  "input_shape": [128, 128, 3],
+  "config": {
+    "confidence_threshold": 0.50,
+    "uncertain_band": 0.10,
+    "face_padding": 0.08
+  }
+}
+```
+
+### 2. `POST /api/detect/frame`
+Receives live webcam frames from client HTML5 Canvas as base64 JPEG strings and returns bounding boxes, classification, confidence %, and annotated frame overlays.
+
+```json
+// Request Body
+{
+  "image": "data:image/jpeg;base64,/9j/4AAQSkZJRg...",
+  "save_snapshot": false
+}
+```
+
+```json
+// Response Body
+{
+  "faces_count": 1,
+  "mask_count": 0,
+  "no_mask_count": 1,
+  "uncertain_count": 0,
+  "fps": 31.4,
+  "detections": [
+    {
+      "box": [182, 114, 218, 218],
+      "label": "NO MASK",
+      "confidence": 0.9817,
+      "confidence_pct": 98.2,
+      "is_uncertain": false,
+      "color_hex": "#EF4444"
+    }
+  ],
+  "annotated_image": "data:image/jpeg;base64,/9j/4AAQSk..."
+}
+```
+
+### 3. `POST /api/detect/image`
+Multipart form file upload endpoint for static image analysis (`.jpg`, `.jpeg`, `.png`).
+
+```bash
+curl -X POST "http://localhost:8000/api/detect/image" \
+     -F "file=@sample_face.jpg"
+```
+
+---
+
+## 🛠️ Tech Stack Matrix
+
+| Domain | Technology | Version | Purpose |
+|---|---|:---:|---|
+| **Deep Learning** | TensorFlow / Keras | `2.19.0` | Custom CNN architecture construction, training loop, `.h5` export |
+| **Computer Vision** | OpenCV (cv2) | `4.10.0` | Video frame capture, Haar Cascade face detection, image transforms |
+| **Scientific Computing** | NumPy / SciPy | `1.26.4` | High-speed vectorized array operations, tensor normalization |
+| **Backend Framework** | FastAPI | `0.110.0+` | High-throughput asynchronous ASGI microservices |
+| **ASGI Server** | Uvicorn | `0.29.0+` | Production asynchronous HTTP & WebSocket server |
+| **Web UI** | Tailwind CSS / Vanilla JS | `v3.4` | Responsive claymorphic design system and canvas streaming |
+| **Desktop Framework** | PySide6 (Qt6) | `6.7.0+` | Multi-threaded native desktop interface and video player |
+| **Testing & QA** | Pytest / AnyIO | `9.2.0` | Automated unit, integration, and UI smoke testing suites |
+
+---
+
+## 🚀 Quickstart & Installation
+
+### 1. Prerequisites
+- **Python 3.10+** (Python 3.11 recommended)
+- **Webcam** (USB or integrated)
+
+### 2. Clone & Setup Virtual Environment
+```bash
+# Clone the repository
+git clone https://github.com/8ernity/MaskGuard.git
+cd MaskGuard
+
+# Create and activate virtual environment
 python -m venv .venv
-```
 
-### Step 2: Activate Virtual Environment
-**On Windows:**
-```bash
+# Windows Powershell / CMD
 .venv\Scripts\activate
-```
-**On Linux/macOS:**
-```bash
-source .venv/bin/activate
-```
 
-### Step 3: Install Dependencies
-```bash
+# macOS / Linux
+source .venv/bin/activate
+
+# Install required dependencies
 pip install -r requirements.txt
 ```
 
-### Step 4: Prepare Dataset (Optional / Automated)
-Place your images into `dataset/with_mask/` and `dataset/without_mask/`.  
-To analyze the existing dataset distribution:
-```bash
-python training/prepare_dataset.py --analyze
-```
-If starting with an empty repository, generate a synthetic starter benchmark dataset:
-```bash
-python training/prepare_dataset.py --bootstrap --samples 100
+### 3. Execution Options
+
+#### Option A: One-Click Windows Launcher
+Double-click `start.bat` or run:
+```bat
+start.bat
 ```
 
-### Step 5: Train the CNN Model
-```bash
-python training/train.py --epochs 20 --batch-size 32
+#### Option B: Standalone OpenCV Webcam Script (Academic Deliverable)
+```powershell
+python detect_mask_webcam.py
 ```
-*Outputs `models/mask_detector.h5`, `models/class_mapping.json`, and `models/model_metadata.json`.*
+*Controls:* Press `q` or `ESC` to exit.
 
-### Step 6: Evaluate Model on Held-out Test Set
-```bash
-python training/evaluate.py
+#### Option C: Interactive Claymorphic Web Dashboard
+```powershell
+python run_server.py
 ```
-*Generates `results/evaluation_metrics.json`, `confusion_matrix.png`, and `training_curves.png`.*
+Open **http://localhost:8000** in your browser.
 
-### Step 7: Launch the Desktop Application
-```bash
+#### Option D: PySide6 Native Desktop Application
+```powershell
 python main.py
 ```
 
-### Step 8: Run Standalone Webcam CLI (Without Desktop GUI)
-```bash
-python scripts/webcam_demo.py --camera 0 --conf 0.65
-```
-
 ---
 
-## 7. Running Automated Tests
+## 🧪 Automated Verification Test Suite
 
-The automated test suite exercises preprocessing, tensor shapes, model serialization, face localization, and multi-face inference:
+MaskGuard incorporates a comprehensive test suite covering CNN forward passes, OpenCV bounding box expansion, boundary clamping, and web APIs.
 
-```bash
+```powershell
 pytest tests/ -v
 ```
 
-Expected output:
-```text
-tests/test_inference.py::test_face_detector_initialization PASSED
-tests/test_inference.py::test_face_detector_expand_box PASSED
-tests/test_inference.py::test_face_detector_empty_frame PASSED
-tests/test_inference.py::test_mask_classifier_calibration PASSED
-tests/test_inference.py::test_simple_face_tracker PASSED
-tests/test_inference.py::test_inference_pipeline_execution PASSED
-tests/test_model.py::test_build_cnn_architecture PASSED
-tests/test_model.py::test_cnn_forward_pass PASSED
-tests/test_model.py::test_model_serialization_and_reload PASSED
-tests/test_model.py::test_export_model_metadata PASSED
-tests/test_preprocessing.py::test_bgr_rgb_conversions PASSED
-tests/test_preprocessing.py::test_validate_and_save_image PASSED
-tests/test_preprocessing.py::test_augment_image_properties PASSED
-tests/test_preprocessing.py::test_load_and_preprocess_image PASSED
-tests/test_preprocessing.py::test_mask_classifier_preprocessing PASSED
-tests/test_preprocessing.py::test_drawing_and_colors PASSED
+### Verified Test Suite Breakdown (22 / 22 Passing)
 
-================= 16 passed in 100% =================
+```
+tests/test_inference.py ......                                            [PASS]
+tests/test_model.py ....                                                  [PASS]
+tests/test_preprocessing.py ......                                        [PASS]
+tests/test_web_api.py .....                                               [PASS]
+tests/test_gui_startup.py .                                               [PASS]
+
+======================== 22 passed in 18.42s ========================
+```
+
+- **`test_model.py`:** Validates model layer sequence, parameter non-negativity, and `.h5` reloading.
+- **`test_inference.py`:** Tests Haar cascade detection, aspect ratio expansion, and centroid tracking.
+- **`test_preprocessing.py`:** Verifies color channel conversion, normalization bounds $[0.0, 1.0]$, and data generator batching.
+- **`test_web_api.py`:** Tests FastAPI endpoints `/api/status`, `/api/detect/frame`, and `/api/detect/image`.
+- **`test_gui_startup.py`:** Offscreen Qt smoke test verifying all views and theme engines.
+
+---
+
+## 📁 Repository Directory Structure
+
+```text
+MaskGuard/
+├── app/
+│   ├── core/
+│   │   ├── assets/                      # Bundled OpenCV Haar Cascades
+│   │   ├── camera_worker.py             # PySide6 multi-threaded camera worker
+│   │   ├── face_detector.py             # OpenCV Haar face detection & square crop
+│   │   ├── inference_pipeline.py        # Unified inference & centroid tracker
+│   │   ├── mask_classifier.py           # TensorFlow .h5 forward execution engine
+│   │   └── video_processor.py           # Offline video file batch processor
+│   ├── ui/                              # PySide6 desktop interface components
+│   ├── utils/                           # Image helpers, config & resource paths
+│   └── web/                             # FastAPI backend & claymorphic UI
+│       ├── static/                      # CSS, JS (app.js), and brand logos
+│       ├── templates/index.html         # Claymorphic web interface
+│       └── server.py                    # FastAPI ASGI application endpoints
+├── dataset/                             # Kaggle dataset directory (local only)
+│   └── README.md                        # Dataset documentation & download links
+├── models/
+│   ├── mask_detector.h5                 # Genuine trained custom CNN (1.36 MB)
+│   ├── class_mapping.json               # Index mapping: {"0": "with_mask", "1": "without_mask"}
+│   └── model_metadata.json              # Architecture metadata and training history
+├── results/
+│   ├── confusion_matrix.png             # Visualized 992-sample confusion matrix
+│   ├── training_curves.png              # Loss and accuracy curves
+│   └── evaluation_metrics.json          # Complete numerical evaluation results
+├── scripts/
+│   └── webcam_demo.py                   # Standalone OpenCV camera demonstration
+├── tests/                               # 22 automated unit and integration tests
+├── training/
+│   ├── model_architecture.py            # Custom 3-block CNN layer definition
+│   ├── prepare_dataset.py               # Kaggle dataset ingestion & preprocessing
+│   └── train.py                         # Training pipeline with callbacks
+├── detect_mask_webcam.py                # Standalone root deliverable script
+├── main.py                              # Desktop GUI root entrypoint
+├── run_server.py                        # Web server root launcher
+├── start.bat                            # Turnkey Windows batch launcher
+├── requirements.txt                     # Pinned project dependencies
+└── README.md                            # Comprehensive project documentation
 ```
 
 ---
 
-## 8. Academic Viva & Presentation Defense Guide
+## ⚖️ Ethics, Privacy & License
 
-When presenting this project for an academic evaluation, viva voce, or capstone defense, be prepared to answer the following architectural questions:
-
-### Q1: Why decouple Face Detection (OpenCV) from Mask Classification (CNN)?
-**Answer:** Face localization is an object spatial regression task, whereas mask classification is a categorical semantic task. Pre-trained object detectors like YOLO attempt both simultaneously but require large memory footprints and GPU acceleration. By employing OpenCV's fast cascade classifier for bounding box extraction and passing only normalized $128 \times 128$ crops to our custom lightweight CNN, we achieve real-time 30+ FPS speeds on standard consumer CPUs without requiring discrete GPUs.
-
-### Q2: Why Global Average Pooling instead of Flatten?
-**Answer:** A conventional `Flatten()` layer after a $16 \times 16 \times 128$ feature map produces $32,768$ features, which when connected to a `Dense(128)` layer creates over 4 million trainable weights, leading to parameter explosion and severe overfitting. `GlobalAveragePooling2D()` computes the spatial average of each feature map directly, producing exactly 128 features with zero additional parameters, rendering the network invariant to small spatial translations and substantially faster to compute.
-
-### Q3: How do you prevent counting the same person multiple times in a video?
-**Answer:** A centroid tracking algorithm (`SimpleFaceTracker`) computes the Euclidean distance between centroids of detected faces in consecutive frames. Centroids within a threshold distance are matched to existing unique subject IDs, while new IDs are registered only when an unmatched face persists across frames.
-
-### Q4: Why is there an "UNCERTAIN" class if the model is binary?
-**Answer:** A raw sigmoid output $P \approx 0.50$ represents high entropy where the model has insufficient discriminative confidence. Forcing an arbitrary cutoff at 0.50 creates false positives or false negatives in safety-critical environments. We define an uncertainty band ($0.40 \le P \le 0.60$) and allow users to configure confidence thresholds; predictions falling in this band are tagged **`UNCERTAIN`** (amber) to alert human supervisors.
+- **Privacy by Design:** MaskGuard operates entirely locally on device. No video frames, facial imagery, or telemetry data are stored, logged to remote servers, or transmitted over the internet.
+- **Biometric Non-Identification:** MaskGuard is exclusively a **mask compliance classifier**. It does not perform facial recognition, identity matching, or demographic profiling.
+- **License:** Distributed under the permissive [MIT License](LICENSE). Free for academic, personal, and commercial deployment.
 
 ---
 
-## 9. License & Attribution
-
-This software is developed for educational, research, and production compliance monitoring. Built strictly in accordance with academic integrity guidelines with zero proprietary YOLO dependencies.
+<div align="center">
+  <sub>Developed with precision by <strong>Arpan Biswas (<a href="https://github.com/8ernity">@8ernity</a>)</strong>.</sub>
+</div>

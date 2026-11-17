@@ -7,14 +7,104 @@ from __future__ import annotations
 
 from pathlib import Path
 import time
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QObject, Signal, Slot
+
+try:
+    from PySide6.QtCore import QObject, Signal, Slot
+except ImportError:
+    # Allow running in headless environments without PySide6
+    class QObject:  # type: ignore
+        pass
+    def Signal(*args, **kwargs):  # type: ignore
+        return None
+    def Slot(*args, **kwargs):  # type: ignore
+        def decorator(f):
+            return f
+        return decorator
 
 from app.core.inference_pipeline import InferencePipeline
 from app.utils.resource_paths import get_videos_dir
+
+
+def process_video_file(
+    input_path: Path | str,
+    output_path: Path | str,
+    pipeline: InferencePipeline,
+    progress_callback: Optional[Callable[[int, int, float], None]] = None,
+) -> Dict[str, Any]:
+    """
+    Pure Python headless video processor for web API and background tasks.
+    Reads input video frame-by-frame, annotates faces, and exports to output_path.
+    """
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input video file not found: {input_path}")
+
+    cap = cv2.VideoCapture(str(input_path))
+    if not cap.isOpened():
+        raise ValueError(f"Failed to open video file: {input_path}")
+
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    orig_fps = cap.get(cv2.CAP_PROP_FPS)
+    fps = orig_fps if orig_fps > 0 else 25.0
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    if total_frames <= 0 or width <= 0 or height <= 0:
+        cap.release()
+        raise ValueError("Corrupted or empty video stream detected.")
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
+    if not writer.isOpened():
+        fourcc = cv2.VideoWriter_fourcc(*"avc1")
+        writer = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
+    if not writer.isOpened():
+        fourcc = cv2.VideoWriter_fourcc(*"XVID")
+        fallback_path = output_path.with_suffix(".avi")
+        writer = cv2.VideoWriter(str(fallback_path), fourcc, fps, (width, height))
+        if not writer.isOpened():
+            cap.release()
+            raise RuntimeError("Failed to initialize video encoder. Verify codec availability.")
+        output_path = fallback_path
+
+    current_frame = 0
+    start_time = time.time()
+    last_callback_time = 0.0
+
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                break
+
+            current_frame += 1
+            annotated, detections, stats = pipeline.process_frame(frame, track_session=False)
+            writer.write(annotated)
+
+            now = time.time()
+            if progress_callback and (now - last_callback_time >= 0.15 or current_frame == total_frames):
+                elapsed = max(0.001, now - start_time)
+                proc_fps = current_frame / elapsed
+                progress_callback(current_frame, total_frames, proc_fps)
+                last_callback_time = now
+    finally:
+        cap.release()
+        writer.release()
+
+    return {
+        "total_frames": current_frame,
+        "output_path": str(output_path),
+        "fps": fps,
+        "width": width,
+        "height": height,
+    }
 
 
 class VideoProcessor(QObject):

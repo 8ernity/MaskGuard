@@ -34,9 +34,9 @@ from app.utils.resource_paths import get_default_model_path, get_screenshots_dir
 def run_webcam_demo(
     camera_index: int = 0,
     model_path: str | None = None,
-    confidence_threshold: float = 0.65,
-    scale_factor: float = 1.1,
-    min_neighbors: int = 5,
+    confidence_threshold: float = 0.50,
+    scale_factor: float = 1.10,
+    min_neighbors: int = 7,
 ) -> None:
     """Run standalone OpenCV camera loop."""
     config = AppConfig.load()

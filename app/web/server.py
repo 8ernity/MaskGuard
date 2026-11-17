@@ -38,7 +38,7 @@ from fastapi.staticfiles import StaticFiles
 from app.core.face_detector import FaceDetector
 from app.core.inference_pipeline import InferencePipeline
 from app.core.mask_classifier import MaskClassifier
-from app.core.video_processor import VideoProcessor
+from app.core.video_processor import VideoProcessor, process_video_file
 from app.utils.config import AppConfig
 from app.utils.image_utils import bgr_to_rgb, save_image_bgr
 from app.utils.resource_paths import (
@@ -188,11 +188,17 @@ async def detect_frame(payload: Dict[str, Any]) -> Dict[str, Any]:
             ),
         })
 
-    annotated_b64 = bgr_to_base64(annotated_frame, quality=75)
+    # Only encode full-resolution JPEG when snapshot is requested or client explicitly needs image preview
+    return_annotated = payload.get("return_annotated", False)
+    save_snap = payload.get("save_snapshot", False)
+    
+    annotated_b64 = None
+    if return_annotated or save_snap:
+        annotated_b64 = bgr_to_base64(annotated_frame, quality=75)
 
     # Optional snapshot capture
     snapshot_url = None
-    if payload.get("save_snapshot"):
+    if save_snap:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:19]
         snap_path = get_screenshots_dir() / f"snapshot_{timestamp}.jpg"
         save_image_bgr(snap_path, annotated_frame)
@@ -266,30 +272,27 @@ async def detect_image(file: UploadFile = File(...)) -> Dict[str, Any]:
 
 def _process_video_task(job_id: str, input_path: Path, output_path: Path) -> None:
     """Background sequential video frame processor worker."""
-    pipe = get_or_create_pipeline()
-    video_processor = VideoProcessor(
-        face_detector=pipe.detector,
-        mask_classifier=pipe.classifier,
-        config=pipe.config,
-    )
-
-    def on_progress(current: int, total: int, fps: float) -> None:
-        if job_id in video_jobs:
-            video_jobs[job_id]["current_frame"] = current
-            video_jobs[job_id]["total_frames"] = total
-            video_jobs[job_id]["fps"] = round(fps, 1)
-            video_jobs[job_id]["progress"] = round((current / max(total, 1)) * 100, 1)
-
     try:
-        video_processor.process_video(
-            input_path=str(input_path),
-            output_path=str(output_path),
+        pipe = get_or_create_pipeline()
+
+        def on_progress(current: int, total: int, fps: float) -> None:
+            if job_id in video_jobs:
+                video_jobs[job_id]["current_frame"] = current
+                video_jobs[job_id]["total_frames"] = total
+                video_jobs[job_id]["fps"] = round(fps, 1)
+                video_jobs[job_id]["progress"] = round((current / max(total, 1)) * 100, 1)
+
+        result = process_video_file(
+            input_path=input_path,
+            output_path=output_path,
+            pipeline=pipe,
             progress_callback=on_progress,
         )
+        final_out_path = Path(result.get("output_path", str(output_path)))
         if job_id in video_jobs:
             video_jobs[job_id]["status"] = "completed"
             video_jobs[job_id]["progress"] = 100.0
-            video_jobs[job_id]["download_url"] = f"/results_files/videos/{output_path.name}"
+            video_jobs[job_id]["download_url"] = f"/results_files/videos/{final_out_path.name}"
     except Exception as e:
         logger.exception("Video processing failed for job %s: %s", job_id, e)
         if job_id in video_jobs:

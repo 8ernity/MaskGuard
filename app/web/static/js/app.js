@@ -9,6 +9,13 @@ let currentTab = "live";
 let webcamStream = null;
 let isDetecting = false;
 let isRequestInProgress = false;
+let renderAnimationId = null;
+let latestDetections = [];
+let smoothFps = 0;
+let renderFrames = 0;
+let lastFpsUpdate = performance.now();
+let displayFps = 30;
+let lastLoggedTime = 0;
 let detectionHistory = [];
 
 const offscreenCanvas = document.createElement("canvas");
@@ -27,6 +34,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initNavigation();
   initControls();
   initSettings();
+  loadServerSettings();
   initMediaAnalysis();
   enumerateCameras();
   loadSystemStatus();
@@ -36,6 +44,23 @@ document.addEventListener("DOMContentLoaded", () => {
     lucide.createIcons();
   }
 });
+
+async function loadServerSettings() {
+  try {
+    const res = await fetch("/api/settings");
+    const s = await res.json();
+    const slider = document.getElementById("confidence-slider");
+    const sliderPill = document.getElementById("threshold-val-pill");
+    if (slider && s.confidence_threshold !== undefined) {
+      const pct = Math.round(s.confidence_threshold * 100);
+      slider.value = pct;
+      if (sliderPill) sliderPill.textContent = `${s.confidence_threshold.toFixed(2)} (${pct}%)`;
+      updateSliderFill(slider, pct);
+    }
+  } catch (e) {
+    console.log("Could not load initial settings:", e);
+  }
+}
 
 // --- Tab Navigation ---
 function initNavigation() {
@@ -83,6 +108,17 @@ function initNavigation() {
   });
 }
 
+function updateSliderFill(slider, val) {
+  if (!slider) return;
+  const min = parseFloat(slider.min) || 0;
+  const max = parseFloat(slider.max) || 100;
+  const rawVal = val !== undefined ? parseFloat(val) : (parseFloat(slider.value) || 0);
+  const pct = Math.max(0, Math.min(100, ((rawVal - min) / (max - min)) * 100));
+  // Exact geometric alignment to circular thumb center (thumb width 22px, radius 11px)
+  const offsetCalc = `calc(11px + (100% - 22px) * ${(pct / 100).toFixed(4)})`;
+  slider.style.background = `linear-gradient(to right, #946af4 0%, #946af4 ${offsetCalc}, #e2e8f0 ${offsetCalc}, #e2e8f0 100%)`;
+}
+
 // --- Live Camera Controls ---
 function initControls() {
   const startBtn = document.getElementById("btn-start-camera");
@@ -98,12 +134,22 @@ function initControls() {
   stopBtn.addEventListener("click", stopLiveDetection);
   capBtn.addEventListener("click", () => captureSnapshot(true));
 
-  slider.addEventListener("input", (e) => {
-    const val = parseInt(e.target.value, 10);
-    const floatVal = (val / 100).toFixed(2);
-    sliderPill.textContent = `${floatVal} (${val}%)`;
-    debounceUpdateThreshold(floatVal);
-  });
+  if (cameraPlaceholder) {
+    cameraPlaceholder.addEventListener("click", () => {
+      if (!isDetecting) startLiveDetection();
+    });
+  }
+
+  if (slider) {
+    updateSliderFill(slider, parseInt(slider.value, 10));
+    slider.addEventListener("input", (e) => {
+      const val = parseInt(e.target.value, 10);
+      const floatVal = (val / 100).toFixed(2);
+      if (sliderPill) sliderPill.textContent = `${floatVal} (${val}%)`;
+      updateSliderFill(slider, val);
+      debounceUpdateThreshold(floatVal);
+    });
+  }
 
   if (clearBtn) clearBtn.addEventListener("click", clearDetectionHistory);
   if (clearFullBtn) clearFullBtn.addEventListener("click", clearDetectionHistory);
@@ -179,10 +225,15 @@ async function startLiveDetection() {
     videoEl.srcObject = webcamStream;
     await videoEl.play();
 
+    // Display canvas matches camera video dimensions
     displayCanvas.width = videoEl.videoWidth || resW;
     displayCanvas.height = videoEl.videoHeight || resH;
-    offscreenCanvas.width = displayCanvas.width;
-    offscreenCanvas.height = displayCanvas.height;
+
+    // Offscreen canvas: downscaled for high-speed inference (max dimension 400 for ~30 FPS response)
+    const maxInferDim = 400;
+    const inferScale = Math.min(1.0, maxInferDim / Math.max(displayCanvas.width, displayCanvas.height));
+    offscreenCanvas.width = Math.round(displayCanvas.width * inferScale);
+    offscreenCanvas.height = Math.round(displayCanvas.height * inferScale);
 
     // Toggle Viewport
     cameraPlaceholder.classList.add("hidden");
@@ -198,7 +249,13 @@ async function startLiveDetection() {
     if (soundwaveBars) soundwaveBars.style.opacity = "1";
 
     isDetecting = true;
-    requestAnimationFrame(detectionLoop);
+    isRequestInProgress = false;
+    latestDetections = [];
+    smoothFps = 0;
+
+    // Start 60 FPS Canvas Render Loop
+    if (renderAnimationId) cancelAnimationFrame(renderAnimationId);
+    renderAnimationId = requestAnimationFrame(renderLoop);
   } catch (err) {
     console.error("Webcam startup failed:", err);
     alert(`Could not start camera: ${err.message}. Please allow camera permissions in your browser.`);
@@ -207,6 +264,15 @@ async function startLiveDetection() {
 
 function stopLiveDetection() {
   isDetecting = false;
+  isRequestInProgress = false;
+  latestDetections = [];
+  activeFaceTracks = [];
+
+  if (renderAnimationId) {
+    cancelAnimationFrame(renderAnimationId);
+    renderAnimationId = null;
+  }
+
   if (webcamStream) {
     webcamStream.getTracks().forEach((t) => t.stop());
     webcamStream = null;
@@ -232,86 +298,253 @@ function stopLiveDetection() {
   document.getElementById("stat-fps").textContent = "0";
 }
 
-async function detectionLoop() {
+// 60 FPS Native Camera Render Loop
+function renderLoop() {
   if (!isDetecting) return;
 
-  if (!isRequestInProgress && videoEl.readyState === videoEl.HAVE_ENOUGH_DATA) {
-    isRequestInProgress = true;
-
-    // Capture frame to offscreen buffer
-    offscreenCtx.drawImage(videoEl, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
-    const frameData = offscreenCanvas.toDataURL("image/jpeg", 0.72);
-
-    try {
-      const res = await fetch("/api/detect/frame", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: frameData }),
-      });
-      const data = await res.json();
-
-      // Render annotated frame to canvas
-      if (data.annotated_image) {
-        const img = new Image();
-        img.onload = () => {
-          displayCtx.drawImage(img, 0, 0, displayCanvas.width, displayCanvas.height);
-        };
-        img.src = data.annotated_image;
-      }
-
-      // Update Live Stats
-      document.getElementById("stat-total-faces").textContent = data.faces_count || 0;
-      document.getElementById("stat-mask-count").textContent = data.mask_count || 0;
-      document.getElementById("stat-nomask-count").textContent = data.no_mask_count || 0;
-      document.getElementById("stat-fps").textContent = data.fps || 0;
-
-      // Log detections to history feed
-      if (data.detections && data.detections.length > 0) {
-        processDetectionsForHistory(data.detections, offscreenCanvas);
-      }
-    } catch (err) {
-      console.warn("Inference frame error:", err);
-    } finally {
-      isRequestInProgress = false;
-    }
+  const now = performance.now();
+  renderFrames++;
+  if (now - lastFpsUpdate >= 500) {
+    displayFps = Math.round((renderFrames * 1000) / (now - lastFpsUpdate));
+    renderFrames = 0;
+    lastFpsUpdate = now;
+    const fpsEl = document.getElementById("stat-fps");
+    if (fpsEl) fpsEl.textContent = displayFps;
   }
 
-  if (isDetecting) {
-    requestAnimationFrame(detectionLoop);
+  if (videoEl && videoEl.readyState >= videoEl.HAVE_CURRENT_DATA) {
+    // 1. Draw live webcam frame smoothly at 60 FPS
+    displayCtx.drawImage(videoEl, 0, 0, displayCanvas.width, displayCanvas.height);
+
+    // 2. Draw active bounding boxes & badges
+    drawDetections(displayCtx, latestDetections);
+  }
+
+  // 3. Dispatch non-blocking inference if idle
+  if (!isRequestInProgress) {
+    runInference();
+  }
+
+  renderAnimationId = requestAnimationFrame(renderLoop);
+}
+
+// Sleek client-side detection renderer matching Visage AI / MaskGuard Claymorphic theme
+function drawDetections(ctx, detections) {
+  if (!detections || detections.length === 0) return;
+
+  ctx.save();
+  for (const d of detections) {
+    const [x, y, w, h] = d.box;
+    const isMask = d.label === "MASK";
+    const strokeColor = isMask ? "#10b981" : "#ef4444"; // Emerald green vs Coral Red
+
+    // Sleek rounded bounding box
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = strokeColor;
+    ctx.shadowColor = isMask ? "rgba(16, 185, 129, 0.45)" : "rgba(239, 68, 68, 0.45)";
+    ctx.shadowBlur = 8;
+
+    const radius = 10;
+    if (typeof ctx.roundRect === "function") {
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, radius);
+      ctx.stroke();
+    } else {
+      ctx.strokeRect(x, y, w, h);
+    }
+
+    // Badge Pill
+    ctx.shadowBlur = 0; // Clear shadow for crisp text rendering
+    const badgeText = `${d.label} ${d.confidence_pct || (d.confidence * 100).toFixed(1)}%`;
+    ctx.font = "bold 13px 'Plus Jakarta Sans', system-ui, sans-serif";
+    const textMetrics = ctx.measureText(badgeText);
+    const badgeW = textMetrics.width + 18;
+    const badgeH = 26;
+    const badgeRadius = 6;
+
+    // Position badge directly above bounding box (or inside if near top canvas boundary)
+    let badgeX = Math.max(4, Math.min(x, ctx.canvas.width - badgeW - 4));
+    let badgeY = y - badgeH - 3;
+    if (badgeY < 4) {
+      badgeY = y + 4;
+    }
+
+    // Badge pill background
+    ctx.fillStyle = strokeColor;
+    if (typeof ctx.roundRect === "function") {
+      ctx.beginPath();
+      ctx.roundRect(badgeX, badgeY, badgeW, badgeH, badgeRadius);
+      ctx.fill();
+    } else {
+      ctx.fillRect(badgeX, badgeY, badgeW, badgeH);
+    }
+
+    // Badge text
+    ctx.fillStyle = "#ffffff";
+    ctx.textBaseline = "middle";
+    ctx.fillText(badgeText, badgeX + 9, badgeY + badgeH / 2);
+  }
+  ctx.restore();
+}
+
+// Decoupled Background Inference Loop
+async function runInference() {
+  if (!isDetecting || isRequestInProgress) return;
+  if (!videoEl || videoEl.readyState < videoEl.HAVE_CURRENT_DATA) return;
+
+  isRequestInProgress = true;
+  const tStart = performance.now();
+
+  // Capture downscaled frame for ultra-fast network transfer & Haar execution
+  offscreenCtx.drawImage(videoEl, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
+  const frameData = offscreenCanvas.toDataURL("image/jpeg", 0.60);
+
+  try {
+    const res = await fetch("/api/detect/frame", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image: frameData, return_annotated: false }),
+    });
+    const data = await res.json();
+
+    const tEnd = performance.now();
+    const cycleTime = Math.max(1, tEnd - tStart);
+    const measuredFps = 1000.0 / cycleTime;
+    smoothFps = smoothFps === 0 ? measuredFps : (0.85 * smoothFps + 0.15 * measuredFps);
+
+    // Compute coordinate mapping from offscreen canvas to display canvas
+    const scaleX = displayCanvas.width / offscreenCanvas.width;
+    const scaleY = displayCanvas.height / offscreenCanvas.height;
+
+    const scaledDetections = (data.detections || []).map((d) => ({
+      ...d,
+      box: [
+        d.box[0] * scaleX,
+        d.box[1] * scaleY,
+        d.box[2] * scaleX,
+        d.box[3] * scaleY,
+      ],
+    }));
+
+    latestDetections = scaledDetections;
+
+    // Update Live Stats HUD
+    document.getElementById("stat-total-faces").textContent = data.faces_count || 0;
+    document.getElementById("stat-mask-count").textContent = data.mask_count || 0;
+    document.getElementById("stat-nomask-count").textContent = data.no_mask_count || 0;
+
+    // Log detections to history feed
+    if (scaledDetections.length > 0) {
+      processDetectionsForHistory(scaledDetections, videoEl);
+    }
+  } catch (err) {
+    console.warn("Inference frame error:", err);
+  } finally {
+    isRequestInProgress = false;
   }
 }
 
-// --- History Feed Processing ---
-function processDetectionsForHistory(detections, sourceCanvas) {
-  const now = new Date();
-  const timeStr = `Today, ${now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
+// --- Smart Event-Driven History Feed Processing ---
+let activeFaceTracks = []; // [{ cx, cy, label, lastSeen, lastLogged }]
+
+function processDetectionsForHistory(detections, sourceVideo) {
+  const now = Date.now();
+  if (!detections || detections.length === 0) {
+    // Drop tracks not seen in 5s
+    activeFaceTracks = activeFaceTracks.filter((t) => now - t.lastSeen < 5000);
+    return;
+  }
+
+  const vW = sourceVideo.videoWidth || displayCanvas.width;
+  const vH = sourceVideo.videoHeight || displayCanvas.height;
 
   detections.forEach((d) => {
-    // Generate crop thumbnail
-    let thumbUrl = "";
-    try {
-      const [x, y, w, h] = d.box;
-      const cropC = document.createElement("canvas");
-      cropC.width = 44;
-      cropC.height = 44;
-      const cropCtx = cropC.getContext("2d");
-      // Clip to bounds
-      const sx = Math.max(0, x);
-      const sy = Math.max(0, y);
-      const sw = Math.min(w, sourceCanvas.width - sx);
-      const sh = Math.min(h, sourceCanvas.height - sy);
-      cropCtx.drawImage(sourceCanvas, sx, sy, sw, sh, 0, 0, 44, 44);
-      thumbUrl = cropC.toDataURL("image/jpeg", 0.8);
-    } catch (e) {
-      thumbUrl = "";
+    // Ignore uncertain classifications in history feed
+    if (d.is_uncertain || d.label === "UNCERTAIN") return;
+
+    const [x, y, w, h] = d.box;
+    const cx = x + w / 2;
+    const cy = y + h / 2;
+
+    // Match with existing track within generous pixel distance (150px) to handle normal head movements
+    let matchedTrack = null;
+    let minDist = 150;
+    for (const t of activeFaceTracks) {
+      const dist = Math.hypot(t.cx - cx, t.cy - cy);
+      if (dist < minDist) {
+        minDist = dist;
+        matchedTrack = t;
+      }
     }
 
-    addHistoryRecord({
-      thumbUrl: thumbUrl,
-      label: d.label,
-      confidence: d.confidence_pct || (d.confidence * 100).toFixed(1),
-      timestamp: timeStr,
-    });
+    const currentLabel = d.label;
+
+    if (matchedTrack) {
+      matchedTrack.cx = cx;
+      matchedTrack.cy = cy;
+      matchedTrack.lastSeen = now;
+
+      const labelChanged = matchedTrack.label !== currentLabel;
+      const timeElapsed = now - matchedTrack.lastLogged;
+      // Re-log only if state changed (e.g. Put on mask or took it off) OR at most once every 30s
+      if (labelChanged || timeElapsed > 30000) {
+        matchedTrack.label = currentLabel;
+        matchedTrack.lastLogged = now;
+        logDetectionEntry(d, sourceVideo, vW, vH);
+      }
+    } else {
+      // New face entered camera view
+      activeFaceTracks.push({
+        cx: cx,
+        cy: cy,
+        label: currentLabel,
+        lastSeen: now,
+        lastLogged: now,
+      });
+      logDetectionEntry(d, sourceVideo, vW, vH);
+    }
+  });
+
+  // Clean up stale tracks not seen in 5s
+  activeFaceTracks = activeFaceTracks.filter((t) => now - t.lastSeen < 5000);
+}
+
+function logDetectionEntry(d, sourceVideo, vW, vH) {
+  const [x, y, w, h] = d.box;
+  let thumbUrl = "";
+  try {
+    const cropC = document.createElement("canvas");
+    cropC.width = 44;
+    cropC.height = 44;
+    const cropCtx = cropC.getContext("2d");
+
+    // Center-chin safe square thumbnail crop
+    const cx = ((x + w / 2) / displayCanvas.width) * vW;
+    const cy = ((y + h / 2) / displayCanvas.height) * vH + ((h * 0.1 * vH) / displayCanvas.height);
+    const side = Math.max(w, h) * 1.35 * (vW / displayCanvas.width);
+    const half = side / 2;
+    const sx = Math.max(0, cx - half);
+    const sy = Math.max(0, cy - half);
+    const sw = Math.min(vW - sx, side);
+    const sh = Math.min(vH - sy, side);
+
+    cropCtx.drawImage(sourceVideo, sx, sy, sw, sh, 0, 0, 44, 44);
+    thumbUrl = cropC.toDataURL("image/jpeg", 0.8);
+  } catch (e) {
+    thumbUrl = "";
+  }
+
+  const timeStr = `Today, ${new Date().toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  })}`;
+
+  addHistoryRecord({
+    thumbUrl: thumbUrl,
+    label: d.label,
+    confidence: d.confidence_pct || (d.confidence * 100).toFixed(1),
+    timestamp: timeStr,
   });
 }
 
@@ -379,13 +612,12 @@ function clearDetectionHistory() {
 
 // --- Snapshot Capture ---
 async function captureSnapshot(notify = true) {
-  if (!videoEl || videoEl.readyState !== videoEl.HAVE_ENOUGH_DATA) {
+  if (!videoEl || videoEl.readyState < videoEl.HAVE_CURRENT_DATA) {
     alert("Camera is not active. Please start the camera first.");
     return;
   }
 
-  offscreenCtx.drawImage(videoEl, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
-  const frameData = offscreenCanvas.toDataURL("image/jpeg", 0.9);
+  const frameData = displayCanvas.toDataURL("image/jpeg", 0.92);
 
   try {
     const res = await fetch("/api/detect/frame", {
@@ -424,7 +656,14 @@ function initMediaAnalysis() {
         const res = await fetch("/api/detect/image", { method: "POST", body: formData });
         const data = await res.json();
         imgPreview.src = data.annotated_image;
-        imgDetails.innerHTML = `<strong>Result:</strong> ${data.faces_count} face(s) detected — <span class="text-emerald-600 font-bold">${data.mask_count} Masked</span>, <span class="text-rose-500 font-bold">${data.no_mask_count} Without Mask</span>.`;
+        if (data.faces_count === 0) {
+          imgDetails.innerHTML = `<span class="text-amber-600 font-bold">No face detected</span> in this image. Try an image with a visible, front-facing face or adjust sensitivity in Settings.`;
+        } else {
+          const maskPart = `<span class="text-emerald-600 font-bold">${data.mask_count} Masked</span>`;
+          const noMaskPart = `<span class="text-rose-500 font-bold">${data.no_mask_count} Without Mask</span>`;
+          const uncPart = data.uncertain_count > 0 ? `, <span class="text-amber-500 font-bold">${data.uncertain_count} Uncertain</span>` : '';
+          imgDetails.innerHTML = `<strong>Result:</strong> ${data.faces_count} face(s) detected — ${maskPart}, ${noMaskPart}${uncPart}.`;
+        }
       } catch (err) {
         imgDetails.textContent = `Analysis error: ${err.message}`;
       }
@@ -448,29 +687,50 @@ function initMediaAnalysis() {
       const progPct = document.getElementById("video-percent-text");
       const progBar = document.getElementById("video-bar");
       progBox.classList.remove("hidden");
+      progStatus.textContent = "Uploading video to server...";
+      progPct.textContent = "0%";
+      progBar.style.width = "0%";
+
+      vidBtn.disabled = true;
+      vidBtn.classList.add("opacity-60");
 
       try {
         const res = await fetch("/api/detect/video", { method: "POST", body: formData });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(errData.detail || "Upload failed");
+        }
         const data = await res.json();
         const pollUrl = data.poll_url;
+        progStatus.textContent = "Analyzing video frames...";
 
         const interval = setInterval(async () => {
-          const pollRes = await fetch(pollUrl);
-          const job = await pollRes.json();
-          progStatus.textContent = `Frame ${job.current_frame} / ${job.total_frames || "?"} (${job.fps} FPS)`;
-          progPct.textContent = `${job.progress}%`;
-          progBar.style.width = `${job.progress}%`;
+          try {
+            const pollRes = await fetch(pollUrl);
+            const job = await pollRes.json();
+            progStatus.textContent = `Frame ${job.current_frame} / ${job.total_frames || "?"} (${job.fps || 0} FPS)`;
+            progPct.textContent = `${job.progress}%`;
+            progBar.style.width = `${job.progress}%`;
 
-          if (job.status === "completed") {
-            clearInterval(interval);
-            progStatus.innerHTML = `Complete! <a href="${job.download_url}" class="text-indigo-600 underline font-bold" download>Download Processed Video</a>`;
-          } else if (job.status === "failed") {
-            clearInterval(interval);
-            progStatus.textContent = `Processing failed: ${job.error}`;
+            if (job.status === "completed") {
+              clearInterval(interval);
+              vidBtn.disabled = false;
+              vidBtn.classList.remove("opacity-60");
+              progStatus.innerHTML = `Complete! <a href="${job.download_url}" class="text-purple-600 underline font-bold ml-1" download>Download Processed Video</a>`;
+            } else if (job.status === "failed") {
+              clearInterval(interval);
+              vidBtn.disabled = false;
+              vidBtn.classList.remove("opacity-60");
+              progStatus.textContent = `Processing failed: ${job.error || "Unknown error"}`;
+            }
+          } catch (pollErr) {
+            console.warn("Poll error:", pollErr);
           }
-        }, 1000);
+        }, 800);
       } catch (err) {
-        progStatus.textContent = `Video upload error: ${err.message}`;
+        vidBtn.disabled = false;
+        vidBtn.classList.remove("opacity-60");
+        progStatus.textContent = `Video error: ${err.message}`;
       }
     });
   }
