@@ -76,6 +76,38 @@ def rgb_to_bgr(img_rgb: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
 
 
+def preprocess_face_tensor(
+    face_bgr: np.ndarray,
+    target_size: Tuple[int, int] = (128, 128),
+) -> np.ndarray:
+    """
+    Canonical, unified preprocessing function shared identically across:
+    - Training data generation
+    - Validation and evaluation
+    - Live webcam inference
+    - Diagnostic inspection
+
+    Pipeline:
+    1. Validate input dimensions.
+    2. Convert 1-channel / 2D grayscale to 3-channel BGR.
+    3. Convert OpenCV BGR to RGB.
+    4. Resize to target_size (128x128) using INTER_AREA.
+    5. Cast to float32 and normalize strictly to [0.0, 1.0] by dividing by 255.0.
+
+    Ensures zero distribution shift between training and production inference.
+    """
+    if face_bgr is None or face_bgr.size == 0:
+        raise ValueError("Cannot preprocess an empty face image.")
+
+    if len(face_bgr.shape) == 2:
+        face_bgr = cv2.cvtColor(face_bgr, cv2.COLOR_GRAY2BGR)
+
+    face_rgb = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB)
+    resized = cv2.resize(face_rgb, target_size, interpolation=cv2.INTER_AREA)
+    normalized = resized.astype(np.float32) / 255.0
+    return normalized
+
+
 def get_detection_color(label: str, is_uncertain: bool = False) -> Tuple[int, int, int]:
     """Return BGR color tuple based on detection state."""
     if is_uncertain:
@@ -135,7 +167,7 @@ def draw_bounding_box(
         cv2.line(image, (x, y + h), (x, y + h - corner_len), color, accent_thickness, cv2.LINE_AA)
         # Bottom-right
         cv2.line(image, (x + w, y + h), (x + w - corner_len, y + h), color, accent_thickness, cv2.LINE_AA)
-        cv2.line(image, (x + w, y + h), (x + w, y + h - corner_len), color, accent_thickness, cv2.LINE_AA)
+        cv2.line(image, (x + w, y + h), (x + w, y + corner_len), color, accent_thickness, cv2.LINE_AA)
 
     # Draw filled badge and text if enabled
     if show_label:

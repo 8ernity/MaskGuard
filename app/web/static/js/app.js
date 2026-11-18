@@ -17,6 +17,7 @@ let lastFpsUpdate = performance.now();
 let displayFps = 30;
 let lastLoggedTime = 0;
 let detectionHistory = [];
+let isCameraFlipped = true; // Mirror camera by default for natural selfie view
 
 const offscreenCanvas = document.createElement("canvas");
 const offscreenCtx = offscreenCanvas.getContext("2d");
@@ -129,10 +130,27 @@ function initControls() {
   const fullBtn = document.getElementById("btn-fullscreen");
   const clearBtn = document.getElementById("btn-clear-history");
   const clearFullBtn = document.getElementById("btn-clear-full-history");
+  const flipBtn = document.getElementById("btn-flip-camera");
 
   startBtn.addEventListener("click", startLiveDetection);
   stopBtn.addEventListener("click", stopLiveDetection);
   capBtn.addEventListener("click", () => captureSnapshot(true));
+
+  if (flipBtn) {
+    flipBtn.addEventListener("click", () => {
+      isCameraFlipped = !isCameraFlipped;
+      const flipText = document.getElementById("flip-status-text");
+      if (isCameraFlipped) {
+        flipBtn.classList.add("text-indigo-600", "border-indigo-200");
+        flipBtn.classList.remove("text-slate-600");
+        if (flipText) flipText.textContent = "Mirrored";
+      } else {
+        flipBtn.classList.remove("text-indigo-600", "border-indigo-200");
+        flipBtn.classList.add("text-slate-600");
+        if (flipText) flipText.textContent = "Normal";
+      }
+    });
+  }
 
   if (cameraPlaceholder) {
     cameraPlaceholder.addEventListener("click", () => {
@@ -229,8 +247,8 @@ async function startLiveDetection() {
     displayCanvas.width = videoEl.videoWidth || resW;
     displayCanvas.height = videoEl.videoHeight || resH;
 
-    // Offscreen canvas: downscaled for high-speed inference (max dimension 400 for ~30 FPS response)
-    const maxInferDim = 400;
+    // Offscreen canvas: high resolution for crisp facial feature inference (max dimension 640)
+    const maxInferDim = 640;
     const inferScale = Math.min(1.0, maxInferDim / Math.max(displayCanvas.width, displayCanvas.height));
     offscreenCanvas.width = Math.round(displayCanvas.width * inferScale);
     offscreenCanvas.height = Math.round(displayCanvas.height * inferScale);
@@ -313,8 +331,14 @@ function renderLoop() {
   }
 
   if (videoEl && videoEl.readyState >= videoEl.HAVE_CURRENT_DATA) {
-    // 1. Draw live webcam frame smoothly at 60 FPS
+    // 1. Draw live webcam frame smoothly at 60 FPS (mirrored horizontally by default for natural selfie view)
+    displayCtx.save();
+    if (isCameraFlipped) {
+      displayCtx.translate(displayCanvas.width, 0);
+      displayCtx.scale(-1, 1);
+    }
     displayCtx.drawImage(videoEl, 0, 0, displayCanvas.width, displayCanvas.height);
+    displayCtx.restore();
 
     // 2. Draw active bounding boxes & badges
     drawDetections(displayCtx, latestDetections);
@@ -400,9 +424,15 @@ async function runInference() {
   isRequestInProgress = true;
   const tStart = performance.now();
 
-  // Capture downscaled frame for ultra-fast network transfer & Haar execution
+  // Capture frame with high quality (0.85) to eliminate DCT block artifacts on mouth and lips
+  offscreenCtx.save();
+  if (isCameraFlipped) {
+    offscreenCtx.translate(offscreenCanvas.width, 0);
+    offscreenCtx.scale(-1, 1);
+  }
   offscreenCtx.drawImage(videoEl, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
-  const frameData = offscreenCanvas.toDataURL("image/jpeg", 0.60);
+  offscreenCtx.restore();
+  const frameData = offscreenCanvas.toDataURL("image/jpeg", 0.85);
 
   try {
     const res = await fetch("/api/detect/frame", {

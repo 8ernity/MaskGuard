@@ -1,6 +1,7 @@
 """
 Custom Convolutional Neural Network (CNN) architecture for face mask classification.
-Constructed using TensorFlow / Keras with strict adherence to architectural specifications.
+Constructed using TensorFlow / Keras with spatial feature preservation,
+Batch Normalization, L2 regularization, and Dropout for robust generalization.
 """
 
 from __future__ import annotations
@@ -11,23 +12,25 @@ from pathlib import Path
 from typing import Tuple
 
 import tensorflow as tf
-from tensorflow.keras import layers, models, optimizers, metrics
+from tensorflow.keras import layers, metrics, models, optimizers, regularizers
 
 
 def build_mask_detector_cnn(
     input_shape: Tuple[int, int, int] = (128, 128, 3),
-    learning_rate: float = 0.001,
+    learning_rate: float = 0.0005,
 ) -> tf.keras.Model:
     """
-    Construct and compile the custom 3-block CNN for face mask detection.
+    Construct and compile the improved custom 4-block CNN for face mask detection.
 
-    Architecture:
+    Architecture Overview:
       Input (128, 128, 3)
-      Block 1: Conv2D(32, 3x3) -> BatchNormalization -> ReLU -> MaxPool2D(2x2)
-      Block 2: Conv2D(64, 3x3) -> BatchNormalization -> ReLU -> MaxPool2D(2x2)
-      Block 3: Conv2D(128, 3x3) -> BatchNormalization -> ReLU -> MaxPool2D(2x2)
-      GlobalAveragePooling2D
-      Dense(128, ReLU) -> Dropout(0.5)
+      Block 1: Conv2D(32, 3x3) -> BatchNormalization -> ReLU -> MaxPool2D(2x2) [64x64x32]
+      Block 2: Conv2D(64, 3x3) -> BatchNormalization -> ReLU -> MaxPool2D(2x2) [32x32x64]
+      Block 3: Conv2D(128, 3x3) -> BatchNormalization -> ReLU -> MaxPool2D(2x2) [16x16x128]
+      Block 4: Conv2D(128, 3x3) -> BatchNormalization -> ReLU -> MaxPool2D(2x2) [8x8x128]
+      Spatial Projection: Conv2D(32, 1x1, ReLU) [8x8x32]
+      Flatten: [2048] — Preserves 8x8 spatial arrangement (upper face vs lower face)
+      Dense(128, ReLU, L2=1e-4) -> Dropout(0.4)
       Dense(1, Sigmoid) [Output: 0 = with_mask, 1 = without_mask]
     """
     model = models.Sequential(
@@ -52,10 +55,24 @@ def build_mask_detector_cnn(
             layers.Activation("relu", name="relu3"),
             layers.MaxPooling2D(pool_size=(2, 2), name="pool3"),
 
+            # Conv Block 4
+            layers.Conv2D(128, (3, 3), padding="same", use_bias=False, name="conv4"),
+            layers.BatchNormalization(name="bn4"),
+            layers.Activation("relu", name="relu4"),
+            layers.MaxPooling2D(pool_size=(2, 2), name="pool4"),
+
+            # Spatial Feature Projection: preserves 8x8 facial topology
+            layers.Conv2D(32, (1, 1), activation="relu", name="spatial_proj"),
+            layers.Flatten(name="spatial_flatten"),
+
             # Classifier Head
-            layers.GlobalAveragePooling2D(name="gap"),
-            layers.Dense(128, activation="relu", name="dense128"),
-            layers.Dropout(0.5, name="dropout0.5"),
+            layers.Dense(
+                128,
+                activation="relu",
+                kernel_regularizer=regularizers.l2(1e-4),
+                name="dense_features",
+            ),
+            layers.Dropout(0.4, name="dropout0.4"),
             layers.Dense(1, activation="sigmoid", name="output_classification"),
         ],
         name="MaskGuard_Custom_CNN",

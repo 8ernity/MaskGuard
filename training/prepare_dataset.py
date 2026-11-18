@@ -32,6 +32,7 @@ from app.utils.resource_paths import (
     get_dataset_dir,
     get_class_mapping_path,
 )
+from app.utils.image_utils import preprocess_face_tensor
 
 # Standard class mapping
 CLASS_MAP = {
@@ -147,10 +148,11 @@ def augment_image(image_rgb: np.ndarray) -> np.ndarray:
     """
     Realistic training-only image augmentations on target-sized image (128x128):
     - Horizontal flip (50% chance)
-    - Small rotation (+/- 12 deg)
-    - Small zoom (0.92 to 1.08)
-    - Small translation (+/- 6 pixels)
-    - Brightness adjustment (+/- 15%)
+    - Small rotation (+/- 10 deg)
+    - Small zoom (0.95 to 1.05)
+    - Small translation (+/- 4 pixels)
+    - Contrast and brightness variations (+/- 15%)
+    - Directional illumination gradient (simulates asymmetric webcam room lighting)
     """
     h, w, c = image_rgb.shape
     aug = image_rgb.copy()
@@ -160,14 +162,14 @@ def augment_image(image_rgb: np.ndarray) -> np.ndarray:
         aug = cv2.flip(aug, 1)
 
     # 2. Random rotation & zoom
-    angle = random.uniform(-12, 12)
-    scale = random.uniform(0.92, 1.08)
+    angle = random.uniform(-10, 10)
+    scale = random.uniform(0.95, 1.05)
     center = (w / 2.0, h / 2.0)
     rot_mat = cv2.getRotationMatrix2D(center, angle, scale)
 
     # 3. Random small translation
-    tx = random.uniform(-6, 6)
-    ty = random.uniform(-6, 6)
+    tx = random.uniform(-4, 4)
+    ty = random.uniform(-4, 4)
     rot_mat[0, 2] += tx
     rot_mat[1, 2] += ty
 
@@ -179,9 +181,17 @@ def augment_image(image_rgb: np.ndarray) -> np.ndarray:
         borderMode=cv2.BORDER_REFLECT_101,
     )
 
-    # 4. Brightness adjustment in-place using cv2.convertScaleAbs (avoids memory spikes)
-    brightness_factor = random.uniform(0.85, 1.15)
-    aug = cv2.convertScaleAbs(aug, alpha=brightness_factor, beta=0)
+    # 4. Brightness and contrast adjustment
+    alpha = random.uniform(0.85, 1.15)
+    beta = random.uniform(-10, 10)
+    aug = cv2.convertScaleAbs(aug, alpha=alpha, beta=beta)
+
+    # 5. Directional lighting gradient (30% chance - simulates webcam lighting from one side)
+    if random.random() < 0.30:
+        gradient = np.linspace(random.uniform(0.82, 1.0), random.uniform(1.0, 1.18), w)
+        if random.random() > 0.5:
+            gradient = gradient[::-1]
+        aug = np.clip(aug.astype(np.float32) * gradient[None, :, None], 0, 255).astype(np.uint8)
 
     return aug
 
@@ -192,24 +202,23 @@ def load_and_preprocess_image(
     augment: bool = False,
 ) -> np.ndarray:
     """
-    Load an image, convert BGR to RGB, resize to target_size first (memory efficient),
-    apply optional augmentation, and normalize to [0.0, 1.0].
+    Load an image, apply optional training augmentation, and normalize
+    using the canonical shared preprocessing function.
     """
     data = np.fromfile(str(file_path), dtype=np.uint8)
     img_bgr = cv2.imdecode(data, cv2.IMREAD_COLOR)
     if img_bgr is None:
         raise ValueError(f"Failed to read image from {file_path}")
 
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-
-    # Resize FIRST to target_size to ensure minimal memory footprint
-    resized = cv2.resize(img_rgb, target_size, interpolation=cv2.INTER_AREA)
+    # Resize to target size in BGR
+    resized_bgr = cv2.resize(img_bgr, target_size, interpolation=cv2.INTER_AREA)
 
     if augment:
-        resized = augment_image(resized)
+        rgb = cv2.cvtColor(resized_bgr, cv2.COLOR_BGR2RGB)
+        aug_rgb = augment_image(rgb)
+        resized_bgr = cv2.cvtColor(aug_rgb, cv2.COLOR_RGB2BGR)
 
-    normalized = resized.astype(np.float32) / 255.0
-    return normalized
+    return preprocess_face_tensor(resized_bgr, target_size=target_size)
 
 
 def create_dataset_splits(
@@ -392,28 +401,13 @@ def load_dataset_splits(
     Dict[int, float],
 ]:
     """
-    Intelligently load dataset splits.
-    If full_dataset=True:
-      Combines all 11,792 images across Train, Validation, and Test into a comprehensive training pool.
-    Otherwise:
-      If official splits ('Train', 'Validation', 'Test') exist, loads them directly with leakage auditing.
-      Otherwise, creates reproducible stratified splits from flat directories.
+    Load dataset splits ensuring strict physical separation between Train, Validation, and Test.
+    Zero data leakage: Test images are NEVER combined with Train images.
     """
     root = Path(dataset_dir)
-    if full_dataset and (root / "Train").exists():
-        tr_p, tr_l, val_p, val_l, te_p, te_l, _ = load_official_dataset_splits(root, purge_leakage=False)
-        all_paths = tr_p + val_p + te_p
-        all_labels = tr_l + val_l + te_l
-        print(f"[*] Full Dataset Mode: Aggregating all {len(all_paths)} images across Train, Validation, and Test splits.")
-        # Create a 5% stratified validation split to monitor convergence
-        train_p, val_p_out, train_l, val_l_out = train_test_split(
-            all_paths, all_labels, test_size=0.05, stratify=all_labels, random_state=random_state
-        )
-        unique_classes = np.unique(train_l)
-        weights = compute_class_weight("balanced", classes=unique_classes, y=train_l)
-        class_weights = {int(c): float(w) for c, w in zip(unique_classes, weights)}
-        return train_p, train_l, val_p_out, val_l_out, te_p, te_l, class_weights
-
+    if full_dataset:
+        print("[!] Warning: full_dataset mode is disabled to prevent test leakage.")
+        print("[*] Enforcing strict partition isolation: Test partition remains strictly held-out.")
     if (root / "Train").exists():
         return load_official_dataset_splits(root, purge_leakage=purge_leakage)
     return create_dataset_splits(root, test_size=test_size, val_size=val_size, random_state=random_state)

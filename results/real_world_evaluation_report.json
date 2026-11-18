@@ -1,0 +1,83 @@
+{
+    "held_out_test_metrics": {
+        "total_samples": 100,
+        "accuracy": 0.94,
+        "precision_nomask": 0.8929,
+        "recall_nomask": 1.0,
+        "f1_score": 0.9434,
+        "confusion_matrix": {
+            "true_positive_mask": 44,
+            "false_positive_nomask": 6,
+            "false_negative_mask": 0,
+            "true_negative_nomask": 50
+        }
+    },
+    "user_webcam_face_benchmark": {
+        "scale_1.00": {
+            "scale_factor": 1.0,
+            "crop_w_h": [
+                104,
+                104
+            ],
+            "raw_sigmoid": 0.984185,
+            "predicted": "without_mask (NO MASK)",
+            "confidence_pct": 98.42,
+            "correct": true
+        },
+        "scale_1.12": {
+            "scale_factor": 1.12,
+            "crop_w_h": [
+                116,
+                116
+            ],
+            "raw_sigmoid": 0.988507,
+            "predicted": "without_mask (NO MASK)",
+            "confidence_pct": 98.85,
+            "correct": true
+        },
+        "scale_1.20": {
+            "scale_factor": 1.2,
+            "crop_w_h": [
+                125,
+                125
+            ],
+            "raw_sigmoid": 0.987496,
+            "predicted": "without_mask (NO MASK)",
+            "confidence_pct": 98.75,
+            "correct": true
+        },
+        "scale_1.25": {
+            "scale_factor": 1.25,
+            "crop_w_h": [
+                130,
+                130
+            ],
+            "raw_sigmoid": 0.985271,
+            "predicted": "without_mask (NO MASK)",
+            "confidence_pct": 98.53,
+            "correct": true
+        },
+        "scale_1.35": {
+            "scale_factor": 1.35,
+            "crop_w_h": [
+                140,
+                140
+            ],
+            "raw_sigmoid": 0.982895,
+            "predicted": "without_mask (NO MASK)",
+            "confidence_pct": 98.29,
+            "correct": true
+        },
+        "scale_1.53": {
+            "scale_factor": 1.53,
+            "crop_w_h": [
+                159,
+                159
+            ],
+            "raw_sigmoid": 0.977235,
+            "predicted": "without_mask (NO MASK)",
+            "confidence_pct": 97.72,
+            "correct": true
+        }
+    }
+}

@@ -1,6 +1,7 @@
 """
-Training script for the custom CNN Face Mask Detector.
-Implements reproducible data loading, callbacks, training loops, evaluation, and genuine .h5 export.
+Training script for the improved custom CNN Face Mask Detector.
+Implements strict split isolation, in-memory caching, vectorized data augmentation,
+reproducible training loops, and genuine .h5 export.
 """
 
 from __future__ import annotations
@@ -9,13 +10,10 @@ import os
 import sys
 from pathlib import Path
 
-# Configure environment for optimal multi-threaded CPU execution
-os.environ["TF_ENABLE_ONEDNN_OPTS"] = "1"
-# Let TensorFlow and NumPy use multi-core threading
-os.environ.pop("OPENBLAS_NUM_THREADS", None)
-os.environ.pop("OMP_NUM_THREADS", None)
+# Configure environment for CPU execution
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
-# Ensure project root is in sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -23,19 +21,22 @@ if str(PROJECT_ROOT) not in sys.path:
 import argparse
 import json
 import random
-from typing import Dict, List, Tuple
+import time
+from typing import Dict, Tuple
 
+import cv2
 import numpy as np
 import tensorflow as tf
+from tensorflow.keras import layers, models
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 
 from app.utils.resource_paths import (
-    get_dataset_dir,
-    get_default_model_path,
-    get_model_dir,
-    get_results_dir,
     get_class_mapping_path,
+    get_default_model_path,
+    get_dataset_dir,
+    get_model_dir,
     get_model_metadata_path,
+    get_results_dir,
 )
 from training.model_architecture import (
     build_mask_detector_cnn,
@@ -43,11 +44,7 @@ from training.model_architecture import (
 )
 from training.prepare_dataset import (
     load_dataset_splits,
-    create_dataset_splits,
-    load_and_preprocess_image,
     save_class_mapping,
-    generate_synthetic_starter_dataset,
-    validate_and_collect_images,
 )
 
 
@@ -59,62 +56,128 @@ def set_seed(seed: int = 42) -> None:
     os.environ["PYTHONHASHSEED"] = str(seed)
 
 
-class DataSequence(tf.keras.utils.Sequence):
+def get_or_create_cache(
+    dataset_dir: Path | str,
+    cache_path: Path | str,
+    seed: int = 42,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[int, float]]:
     """
-    Keras Sequence for memory-efficient batch data generation with training augmentations.
+    Load preprocessed 128x128 uint8 images from disk cache if present,
+    or build cache once from clean splits and persist to disk.
+    Ensures zero dataset leakage.
     """
+    c_path = Path(cache_path)
+    if c_path.is_file():
+        print(f"[*] Loading clean cached splits from {c_path}...")
+        data = np.load(str(c_path), allow_pickle=True)
+        x_train = data["x_train"]
+        y_train = data["y_train"]
+        x_val = data["x_val"]
+        y_val = data["y_val"]
+        x_test = data["x_test"]
+        y_test = data["y_test"]
+        class_weights = data["class_weights"].item()
+        print(f"[*] Cache loaded: Train={len(x_train)}, Val={len(x_val)}, Test={len(x_test)}")
+        return x_train, y_train, x_val, y_val, x_test, y_test, class_weights
 
-    def __init__(
-        self,
-        image_paths: List[Path],
-        labels: List[int],
-        batch_size: int = 32,
-        target_size: Tuple[int, int] = (128, 128),
-        augment: bool = False,
-        shuffle: bool = True,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        self.image_paths = list(image_paths)
-        self.labels = np.array(labels, dtype=np.float32)
-        self.batch_size = batch_size
-        self.target_size = target_size
-        self.augment = augment
-        self.shuffle = shuffle
-        self.indices = np.arange(len(self.image_paths))
-        if self.shuffle:
-            np.random.shuffle(self.indices)
+    print("[*] Cache not found. Generating clean dataset splits from source images...")
+    (
+        train_p, train_l,
+        val_p, val_l,
+        test_p, test_l,
+        class_weights,
+    ) = load_dataset_splits(dataset_dir, purge_leakage=True, random_state=seed)
 
-    def __len__(self) -> int:
-        return int(np.ceil(len(self.image_paths) / self.batch_size))
+    def _load_batch(paths):
+        arr = np.empty((len(paths), 128, 128, 3), dtype=np.uint8)
+        for i, p in enumerate(paths):
+            data = np.fromfile(str(p), dtype=np.uint8)
+            img_bgr = cv2.imdecode(data, cv2.IMREAD_COLOR)
+            if img_bgr is None:
+                arr[i] = 0
+                continue
+            rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            arr[i] = cv2.resize(rgb, (128, 128), interpolation=cv2.INTER_AREA)
+        return arr
 
-    def __getitem__(self, idx: int) -> Tuple[np.ndarray, np.ndarray]:
-        batch_indices = self.indices[idx * self.batch_size : (idx + 1) * self.batch_size]
-        batch_images = []
-        batch_labels = self.labels[batch_indices]
+    print(f"[*] Caching {len(train_p)} train images...")
+    x_train = _load_batch(train_p)
+    y_train = np.array(train_l, dtype=np.float32)
 
-        for i in batch_indices:
-            img = load_and_preprocess_image(
-                self.image_paths[i],
-                target_size=self.target_size,
-                augment=self.augment,
-            )
-            batch_images.append(img)
+    print(f"[*] Caching {len(val_p)} val images...")
+    x_val = _load_batch(val_p)
+    y_val = np.array(val_l, dtype=np.float32)
 
-        return np.array(batch_images, dtype=np.float32), batch_labels
+    print(f"[*] Caching {len(test_p)} test images...")
+    x_test = _load_batch(test_p)
+    y_test = np.array(test_l, dtype=np.float32)
 
-    def on_epoch_end(self) -> None:
-        if self.shuffle:
-            np.random.shuffle(self.indices)
-        import gc
-        gc.collect()
+    c_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        str(c_path),
+        x_train=x_train,
+        y_train=y_train,
+        x_val=x_val,
+        y_val=y_val,
+        x_test=x_test,
+        y_test=y_test,
+        class_weights=class_weights,
+    )
+    print(f"[*] Saved clean dataset cache to {c_path} ({c_path.stat().st_size / 1e6:.1f} MB)")
+    return x_train, y_train, x_val, y_val, x_test, y_test, class_weights
+
+
+def build_augmented_training_dataset(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    batch_size: int = 64,
+    seed: int = 42,
+) -> tf.data.Dataset:
+    """
+    Build high-throughput tf.data pipeline with fast vectorized in-graph augmentations:
+    - Normalization from uint8 [0, 255] to float32 [0.0, 1.0]
+    - Random horizontal flip (50% chance)
+    - Random brightness variation (+/- 10%)
+    """
+    ds = tf.data.Dataset.from_tensor_slices((x_train, y_train))
+    ds = ds.shuffle(buffer_size=min(4000, len(x_train)), seed=seed, reshuffle_each_iteration=True)
+
+    data_augmentation = tf.keras.Sequential(
+        [
+            layers.Rescaling(1.0 / 255.0),
+            layers.RandomFlip("horizontal", seed=seed),
+            layers.RandomBrightness(factor=0.10, value_range=(0.0, 1.0), seed=seed),
+        ],
+        name="data_augmentation",
+    )
+
+    def _augment(x, y):
+        return data_augmentation(x, training=True), y
+
+    ds = ds.batch(batch_size)
+    ds = ds.map(_augment, num_parallel_calls=tf.data.AUTOTUNE)
+    ds = ds.prefetch(tf.data.AUTOTUNE)
+    return ds
+
+
+def build_evaluation_dataset(
+    x_eval: np.ndarray,
+    y_eval: np.ndarray,
+    batch_size: int = 64,
+) -> tf.data.Dataset:
+    """Deterministic evaluation dataset: rescaling uint8 -> float32 [0, 1]."""
+    ds = tf.data.Dataset.from_tensor_slices((x_eval, y_eval))
+    ds = ds.batch(batch_size)
+    ds = ds.map(lambda x, y: (tf.cast(x, tf.float32) / 255.0, y), num_parallel_calls=tf.data.AUTOTUNE)
+    ds = ds.prefetch(tf.data.AUTOTUNE)
+    return ds
 
 
 def train_model(
     dataset_dir: Path | str,
-    epochs: int = 25,
-    batch_size: int = 32,
-    learning_rate: float = 0.001,
+    epochs: int = 6,
+    batch_size: int = 64,
+    learning_rate: float = 0.0005,
     seed: int = 42,
     output_model_path: Path | str | None = None,
     full_dataset: bool = False,
@@ -127,49 +190,42 @@ def train_model(
     model_save_path = Path(output_model_path) if output_model_path else get_default_model_path()
     model_save_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Check if dataset is populated; if empty, create starter dataset
-    paths, labels, counts = validate_and_collect_images(ds_path)
-    if len(paths) < 10:
-        print(f"Dataset in {ds_path} contains fewer than 10 valid images. Synthesizing starter dataset...")
-        generate_synthetic_starter_dataset(ds_path, samples_per_class=100, seed=seed)
-
-    # Load splits (official splits if available, otherwise stratified split)
+    cache_file = get_results_dir() / "clean_splits_cache.npz"
     (
-        train_paths, train_labels,
-        val_paths, val_labels,
-        test_paths, test_labels,
+        x_train, y_train,
+        x_val, y_val,
+        x_test, y_test,
         class_weights,
-    ) = load_dataset_splits(
-        ds_path, test_size=0.15, val_size=0.15, random_state=seed, full_dataset=full_dataset
-    )
+    ) = get_or_create_cache(ds_path, cache_file, seed=seed)
 
-    print(f"Dataset split: Train={len(train_paths)}, Val={len(val_paths)}, Test={len(test_paths)}")
-    print(f"Computed class weights: {class_weights}")
+    print(f"\n[*] Training configuration:")
+    print(f"    - Train samples: {len(x_train)}")
+    print(f"    - Val samples:   {len(x_val)}")
+    print(f"    - Test samples:  {len(x_test)} (STRICTLY HELD OUT)")
+    print(f"    - Batch size:    {batch_size}")
+    print(f"    - Learning rate: {learning_rate}")
+    print(f"    - Epochs:        {epochs}")
+    print(f"    - Class weights: {class_weights}")
 
-    # Build sequences
-    train_gen = DataSequence(
-        train_paths, train_labels, batch_size=batch_size, augment=True, shuffle=True
-    )
-    val_gen = DataSequence(
-        val_paths, val_labels, batch_size=batch_size, augment=False, shuffle=False
-    )
+    train_ds = build_augmented_training_dataset(x_train, y_train, batch_size=batch_size, seed=seed)
+    val_ds = build_evaluation_dataset(x_val, y_val, batch_size=batch_size)
+    test_ds = build_evaluation_dataset(x_test, y_test, batch_size=batch_size)
 
-    # Build CNN
+    # Build improved CNN architecture
     model = build_mask_detector_cnn(input_shape=(128, 128, 3), learning_rate=learning_rate)
     print("\n--- Model Architecture Summary ---")
     model.summary()
 
-    # Callbacks
     checkpoint_temp = get_model_dir() / "best_weights.keras"
     callbacks = [
         EarlyStopping(
             monitor="val_accuracy",
-            patience=8,
+            patience=3,
             restore_best_weights=True,
             verbose=1,
         ),
         ReduceLROnPlateau(
-            monitor="loss",
+            monitor="val_loss",
             factor=0.5,
             patience=2,
             min_lr=1e-6,
@@ -184,14 +240,17 @@ def train_model(
     ]
 
     print("\nStarting CNN training...")
+    t_start = time.time()
     history = model.fit(
-        train_gen,
-        validation_data=val_gen,
+        train_ds,
+        validation_data=val_ds,
         epochs=epochs,
         class_weight=class_weights,
         callbacks=callbacks,
         verbose=1,
     )
+    train_duration = time.time() - t_start
+    print(f"\nTraining completed in {train_duration:.1f}s ({train_duration/60:.2f} min).")
 
     if checkpoint_temp.exists():
         try:
@@ -200,23 +259,29 @@ def train_model(
         except Exception as e:
             print(f"Note loading checkpoint: {e}")
 
+    # Evaluate on held-out test set
+    print("\n--- Held-out Test Set Evaluation (Zero Leakage) ---")
+    test_results = model.evaluate(test_ds, verbose=1)
+    metric_names = model.metrics_names
+    test_metrics = dict(zip(metric_names, [float(v) for v in test_results]))
+    for k, v in test_metrics.items():
+        print(f"  Test {k}: {v:.4f}")
+
     # Save genuinely trained model as .h5
     print(f"\nExporting trained model to {model_save_path}...")
     try:
         model.save(str(model_save_path))
     except Exception as e:
-        # Fallback to keras format or save_weights if legacy h5 issues occur
-        print(f"Direct .h5 save note ({e}), saving via export format...")
         model.save(str(model_save_path), save_format="h5")
 
     # Verify reload of exported .h5 model
     print("Verifying saved .h5 model reload...")
     reloaded_model = tf.keras.models.load_model(str(model_save_path))
     dummy_input = np.zeros((1, 128, 128, 3), dtype=np.float32)
-    dummy_pred = reloaded_model.predict(dummy_input, verbose=0)
+    dummy_pred = reloaded_model(dummy_input, training=False).numpy()
     print(f"Verification successful! Output shape: {dummy_pred.shape}")
 
-    # Save class mapping and metadata
+    # Save class mapping
     save_class_mapping(get_class_mapping_path())
 
     history_dict = {k: [float(v) for v in vals] for k, vals in history.history.items()}
@@ -229,40 +294,42 @@ def train_model(
         training_metrics={
             "final_train_accuracy": round(final_train_acc, 4),
             "final_val_accuracy": round(final_val_acc, 4),
+            "test_accuracy": round(test_metrics.get("accuracy", 0.0), 4),
+            "test_precision": round(test_metrics.get("precision", 0.0), 4),
+            "test_recall": round(test_metrics.get("recall", 0.0), 4),
             "epochs_trained": len(history.history["loss"]),
             "batch_size": batch_size,
-            "train_samples": len(train_paths),
-            "val_samples": len(val_paths),
-            "test_samples": len(test_paths),
+            "train_samples": len(x_train),
+            "val_samples": len(x_val),
+            "test_samples": len(x_test),
+            "train_duration_sec": round(train_duration, 1),
         },
     )
 
-    # Persist training history JSON for evaluation and UI analytics
     history_file = get_results_dir() / "training_history.json"
     with open(history_file, "w", encoding="utf-8") as f:
         json.dump(history_dict, f, indent=4)
 
-    # Clean up temp checkpoint if desired or keep it as backup
     return {
         "status": "success",
         "model_path": str(model_save_path),
         "history": history_dict,
-        "train_samples": len(train_paths),
-        "val_samples": len(val_paths),
-        "test_samples": len(test_paths),
+        "test_metrics": test_metrics,
+        "train_samples": len(x_train),
+        "val_samples": len(x_val),
+        "test_samples": len(x_test),
         "final_val_accuracy": final_val_acc,
     }
 
 
 def main():
     parser = argparse.ArgumentParser(description="Train custom CNN for Face Mask Detection.")
-    parser.add_argument("--epochs", type=int, default=20, help="Maximum training epochs.")
-    parser.add_argument("--batch-size", type=int, default=32, help="Batch size.")
-    parser.add_argument("--lr", type=float, default=0.001, help="Initial learning rate.")
+    parser.add_argument("--epochs", type=int, default=6, help="Maximum training epochs.")
+    parser.add_argument("--batch-size", type=int, default=64, help="Batch size.")
+    parser.add_argument("--lr", type=float, default=0.0005, help="Initial learning rate.")
     parser.add_argument("--dataset-dir", type=str, default=str(get_dataset_dir()), help="Dataset directory.")
     parser.add_argument("--output-model", type=str, default=str(get_default_model_path()), help="Output .h5 model path.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
-    parser.add_argument("--full-dataset", action="store_true", help="Train on all 11,792 images across Train, Val, and Test.")
     args = parser.parse_args()
 
     train_model(
@@ -272,7 +339,6 @@ def main():
         learning_rate=args.lr,
         seed=args.seed,
         output_model_path=args.output_model,
-        full_dataset=args.full_dataset,
     )
 
 

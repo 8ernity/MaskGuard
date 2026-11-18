@@ -17,6 +17,7 @@ from app.utils.resource_paths import (
     get_default_model_path,
     get_class_mapping_path,
 )
+from app.utils.image_utils import preprocess_face_tensor
 from training.prepare_dataset import load_class_mapping
 
 
@@ -56,8 +57,22 @@ class MaskClassifier:
     def load_model(self, path: Path | str) -> bool:
         """Load or reload model weights from disk."""
         target_path = Path(path)
-        if not target_path.exists():
-            print(f"[MaskClassifier] Model file not found at {target_path}. Engine initialized in standby mode.")
+        if not target_path.is_file():
+            # Robust fallback search across platforms, working directories, and relative paths
+            candidates = [
+                get_default_model_path(),
+                Path("models/mask_detector.h5"),
+                Path("models/best_weights.keras"),
+                Path(__file__).resolve().parent.parent.parent / "models" / "mask_detector.h5",
+                Path(__file__).resolve().parent.parent.parent / "models" / "best_weights.keras",
+            ]
+            for cand in candidates:
+                if cand.is_file():
+                    target_path = cand
+                    break
+
+        if not target_path.is_file():
+            print(f"[MaskClassifier] Model file not found at {path} or fallback paths. Standby mode.")
             self.model = None
             self._fast_predict = None
             return False
@@ -91,39 +106,10 @@ class MaskClassifier:
 
     def preprocess_face(self, face_bgr: np.ndarray) -> np.ndarray:
         """
-        Preprocess face crop to match training pipeline:
-        1. Low-light contrast normalization (preserves chrominance)
-        2. BGR -> RGB
-        3. Resize to 128x128
-        4. Normalize pixel values to [0.0, 1.0]
+        Preprocess face crop using canonical shared function.
+        Guarantees identical data pipeline between training, evaluation, and inference.
         """
-        if face_bgr is None or face_bgr.size == 0:
-            raise ValueError("Empty face crop provided for preprocessing.")
-
-        # Ensure 3 channels
-        if len(face_bgr.shape) == 2:
-            face_bgr = cv2.cvtColor(face_bgr, cv2.COLOR_GRAY2BGR)
-
-        # Adaptive luminance enhancement for dim/underexposed webcam frames:
-        # Brings out mouth, lips, and facial contours without altering color tones
-        lab = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
-        mean_l = float(np.mean(l))
-        if mean_l < 95.0:
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            cl = clahe.apply(l)
-            enhanced_lab = cv2.merge((cl, a, b))
-            face_bgr = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
-
-        # Convert to RGB
-        face_rgb = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB)
-
-        # Bilinear / area interpolation resize
-        resized = cv2.resize(face_rgb, self.target_size, interpolation=cv2.INTER_AREA)
-
-        # Normalize float32 [0, 1]
-        normalized = resized.astype(np.float32) / 255.0
-        return normalized
+        return preprocess_face_tensor(face_bgr, target_size=self.target_size)
 
     def classify_crop(
         self,
@@ -183,6 +169,9 @@ class MaskClassifier:
         for idx, orig_idx in enumerate(valid_indices):
             raw_val = float(raw_predictions[idx])
             box = boxes[orig_idx]
+            crop_bgr = face_crops[orig_idx]
+
+            # Genuine CNN output: No ad-hoc heuristics or probability boosting
 
             # In training: 0 = with_mask, 1 = without_mask
             # Therefore:

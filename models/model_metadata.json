@@ -1,6 +1,13 @@
 {
-    "model_name": "MaskGuard_Custom_CNN",
+    "model_name": "MaskGuard_Custom_CNN_v2",
+    "architecture": "Custom 4-Block Spatial CNN with Topology Preservation",
+    "total_parameters": 508417,
     "input_dimensions": [
+        128,
+        128,
+        3
+    ],
+    "input_shape": [
         128,
         128,
         3
@@ -22,12 +29,14 @@
         0.6
     ],
     "training_metrics": {
-        "final_train_accuracy": 0.952,
-        "final_val_accuracy": 0.9356,
-        "epochs_trained": 6,
-        "batch_size": 32,
-        "train_samples": 11202,
-        "val_samples": 590,
+        "final_train_accuracy": 0.9879,
+        "final_val_accuracy": 0.9688,
+        "test_accuracy": 0.9637,
+        "test_precision": 0.9372,
+        "test_recall": 0.9961,
+        "test_f1": 0.9657,
+        "train_samples": 9828,
+        "val_samples": 800,
         "test_samples": 992
     }
 }

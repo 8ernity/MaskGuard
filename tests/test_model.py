@@ -28,7 +28,7 @@ def test_build_cnn_architecture():
     assert "Conv2D" in layer_types
     assert "BatchNormalization" in layer_types
     assert "MaxPooling2D" in layer_types
-    assert "GlobalAveragePooling2D" in layer_types
+    assert "Flatten" in layer_types
     assert "Dense" in layer_types
     assert "Dropout" in layer_types
 

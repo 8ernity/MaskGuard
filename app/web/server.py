@@ -72,20 +72,24 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# CORS Security: Restrict strictly to localhost and loopback interfaces, plus Render domains
+# CORS Configuration: Support localhost, Render, Vercel, and custom cloud deployments
 ALLOWED_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
     "http://localhost:8001",
     "http://127.0.0.1:8001",
+    "http://localhost:3000",
+    "http://localhost:5173",
 ]
 if os.environ.get("RENDER_EXTERNAL_URL"):
     ALLOWED_ORIGINS.append(os.environ["RENDER_EXTERNAL_URL"].rstrip("/"))
+if os.environ.get("ALLOWED_ORIGINS"):
+    ALLOWED_ORIGINS.extend([o.strip() for o in os.environ["ALLOWED_ORIGINS"].split(",") if o.strip()])
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_origin_regex=r"https://.*\.onrender\.com",
+    allow_origins=["*"] if os.environ.get("CORS_ALLOW_ALL", "false").lower() == "true" else ALLOWED_ORIGINS,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|.*\.onrender\.com|.*\.vercel\.app|.*\.hf\.space|.*\.railway\.app)(:\d+)?$",
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
@@ -622,6 +626,8 @@ async def get_analytics() -> Dict[str, Any]:
     if metrics_path.exists():
         try:
             metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+            if isinstance(metrics, dict) and "accuracy" in metrics and "test_accuracy" not in metrics:
+                metrics["test_accuracy"] = metrics["accuracy"]
         except Exception:
             pass
 

@@ -59,21 +59,27 @@ def main() -> None:
         print("[!] MaskGuard will start in standby mode (inference endpoints will return 503 until model is present).\n")
 
     import socket
-    port = 8000
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        if s.connect_ex(("127.0.0.1", 8000)) == 0:
-            port = 8001
-            print(f"[*] Port 8000 in use by another service. Switching to port {port}...")
+    is_cloud = bool(os.environ.get("PORT") or os.environ.get("RENDER"))
+    port = int(os.environ.get("PORT", 8000))
+    host = os.environ.get("HOST", "0.0.0.0" if is_cloud else "127.0.0.1")
 
-    target_url = f"http://localhost:{port}"
+    if not is_cloud:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(("127.0.0.1", port)) == 0:
+                port = 8001
+                print(f"[*] Port 8000 in use by another service. Switching to port {port}...")
 
-    # Launch browser opener in daemon thread
-    browser_thread = threading.Thread(
-        target=_launch_browser_when_ready,
-        args=(target_url, 35),
-        daemon=True,
-    )
-    browser_thread.start()
+        target_url = f"http://localhost:{port}"
+
+        # Launch browser opener in daemon thread for local sessions
+        browser_thread = threading.Thread(
+            target=_launch_browser_when_ready,
+            args=(target_url, 35),
+            daemon=True,
+        )
+        browser_thread.start()
+    else:
+        target_url = f"http://{host}:{port}"
 
     print("=====================================================================")
     print("       MaskGuard — AI-Powered Face Mask Detection System")
@@ -85,7 +91,7 @@ def main() -> None:
     print("=====================================================================\n")
 
     import uvicorn
-    uvicorn.run("app.web.server:app", host="127.0.0.1", port=port, log_level="info")
+    uvicorn.run("app.web.server:app", host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":

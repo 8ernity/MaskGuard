@@ -32,12 +32,26 @@ class FaceDetector:
         self.min_size = min_size
         self.padding = padding
 
-        # Locate OpenCV cascade file: check bundled assets first, then cv2.data
-        bundled_cascade = (
-            Path(__file__).resolve().parent / "assets" / "haarcascade_frontalface_default.xml"
-        )
-        if bundled_cascade.is_file():
-            cascade_path = str(bundled_cascade)
+        # Locate OpenCV cascade files: check bundled assets first, then cv2.data
+        assets_dir = Path(__file__).resolve().parent / "assets"
+
+        # Primary detector: Frontalface Alt2 (Tree-based Gentle AdaBoost for symmetric centering and background rejection)
+        alt2_file = assets_dir / "haarcascade_frontalface_alt2.xml"
+        if alt2_file.is_file():
+            alt2_path = str(alt2_file)
+        elif hasattr(cv2, "data") and os.path.isfile(
+            os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_alt2.xml")
+        ):
+            alt2_path = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_alt2.xml")
+        else:
+            alt2_path = cv2.samples.findFile("haarcascade_frontalface_alt2.xml")
+
+        self.classifier_alt2 = cv2.CascadeClassifier(alt2_path)
+
+        # Secondary detector: Frontalface Default
+        default_file = assets_dir / "haarcascade_frontalface_default.xml"
+        if default_file.is_file():
+            cascade_path = str(default_file)
         elif hasattr(cv2, "data") and os.path.isfile(
             os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
         ):
@@ -48,15 +62,19 @@ class FaceDetector:
             cascade_path = cv2.samples.findFile("haarcascade_frontalface_default.xml")
 
         self.classifier = cv2.CascadeClassifier(cascade_path)
-        if self.classifier.empty():
-            raise RuntimeError(f"Failed to load OpenCV face cascade from {cascade_path}")
+        if self.classifier.empty() and (self.classifier_alt2 is None or self.classifier_alt2.empty()):
+            raise RuntimeError("Failed to load OpenCV face cascades")
 
-        # Secondary fallback cascade (alt2) for stylized/difficult faces
-        alt_path = ""
-        if hasattr(cv2, "data") and os.path.isfile(
-            os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_alt2.xml")
+        # Tertiary fallback cascade (alt) for stylized/difficult faces
+        alt_file = assets_dir / "haarcascade_frontalface_alt.xml"
+        if alt_file.is_file():
+            alt_path = str(alt_file)
+        elif hasattr(cv2, "data") and os.path.isfile(
+            os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_alt.xml")
         ):
-            alt_path = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_alt2.xml")
+            alt_path = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_alt.xml")
+        else:
+            alt_path = ""
         self.classifier_alt = cv2.CascadeClassifier(alt_path) if alt_path else None
 
     def update_parameters(
@@ -105,36 +123,47 @@ class FaceDetector:
             gray = gray_orig
             scaled_min_size = self.min_size
 
-        # Pass 1: standard detection pass with configured hyperparameters
-        faces = self.classifier.detectMultiScale(
-            gray,
-            scaleFactor=self.scale_factor,
-            minNeighbors=self.min_neighbors,
-            minSize=scaled_min_size,
-            flags=cv2.CASCADE_SCALE_IMAGE,
-        )
+        # Pass 1: Primary Alt2 detector (Gentle AdaBoost - centered, symmetrical, pattern-resistant)
+        faces = ()
+        if self.classifier_alt2 is not None and not self.classifier_alt2.empty():
+            faces = self.classifier_alt2.detectMultiScale(
+                gray,
+                scaleFactor=self.scale_factor,
+                minNeighbors=self.min_neighbors,
+                minSize=scaled_min_size,
+                flags=cv2.CASCADE_SCALE_IMAGE,
+            )
 
-        # Pass 2: sensitive fallback for stylized, difficult, or static images
+        # Pass 2: Frontalface Default detector fallback if Alt2 found no faces
+        if len(faces) == 0 and self.classifier is not None and not self.classifier.empty():
+            faces = self.classifier.detectMultiScale(
+                gray,
+                scaleFactor=self.scale_factor,
+                minNeighbors=self.min_neighbors,
+                minSize=scaled_min_size,
+                flags=cv2.CASCADE_SCALE_IMAGE,
+            )
+
+        # Pass 3: Sensitive fallback for stylized, difficult, or dim faces
         if len(faces) == 0:
             relaxed_neighbors = max(3, self.min_neighbors - 3)
             relaxed_size = (max(24, int(scaled_min_size[0] * 0.65)), max(24, int(scaled_min_size[1] * 0.65)))
-            faces = self.classifier.detectMultiScale(
-                gray,
-                scaleFactor=1.05,
-                minNeighbors=relaxed_neighbors,
-                minSize=relaxed_size,
-                flags=cv2.CASCADE_SCALE_IMAGE,
-            )
-
-        # Pass 3: secondary Alt2 cascade fallback
-        if len(faces) == 0 and self.classifier_alt is not None and not self.classifier_alt.empty():
-            faces = self.classifier_alt.detectMultiScale(
-                gray,
-                scaleFactor=1.05,
-                minNeighbors=max(3, self.min_neighbors - 3),
-                minSize=(max(24, int(scaled_min_size[0] * 0.65)), max(24, int(scaled_min_size[1] * 0.65))),
-                flags=cv2.CASCADE_SCALE_IMAGE,
-            )
+            if self.classifier_alt2 is not None and not self.classifier_alt2.empty():
+                faces = self.classifier_alt2.detectMultiScale(
+                    gray,
+                    scaleFactor=1.05,
+                    minNeighbors=relaxed_neighbors,
+                    minSize=relaxed_size,
+                    flags=cv2.CASCADE_SCALE_IMAGE,
+                )
+            if len(faces) == 0 and self.classifier is not None and not self.classifier.empty():
+                faces = self.classifier.detectMultiScale(
+                    gray,
+                    scaleFactor=1.05,
+                    minNeighbors=relaxed_neighbors,
+                    minSize=relaxed_size,
+                    flags=cv2.CASCADE_SCALE_IMAGE,
+                )
 
         if len(faces) == 0:
             return []
@@ -212,11 +241,14 @@ class FaceDetector:
         box: Tuple[int, int, int, int],
         frame_shape: Tuple[int, int, ...],
         padding: float | None = None,
+        frame_bgr: np.ndarray | None = None,
     ) -> Tuple[int, int, int, int]:
         """
         Expand bounding box symmetrically to capture the entire face cleanly
-        while strictly preserving the 1:1 square aspect ratio matching the training dataset.
-        Includes a downward shift to guarantee complete chin, mouth, and jawline coverage.
+        while strictly matching the face-to-chip proportion of the training dataset (~81.5% face ratio, scale ~1.22x).
+        Includes a modest downward shift (+0.05 * dim) to cleanly include chin and lower lip
+        without capturing excessive background curtains, hair, neck, or shoulders.
+        Ensures a 1:1 square crop with frame boundary clamping.
         """
         pad = self.padding if padding is None else padding
 
@@ -225,19 +257,26 @@ class FaceDetector:
 
         # Use square expansion matching 128x128 training chips
         dim = max(w, h)
-        # Expansion factor ensures chin, jawline, and mouth are fully within the crop
-        scale_mult = 1.35 + (pad * 0.4)
-        target_size = int(dim * scale_mult)
+        # Optimal scale multiplier: 1.12 + pad*0.8 -> 1.20 to 1.22 (matches Kaggle dataset distribution)
+        scale_mult = 1.12 + (pad * 0.8)
+        target_size = int(round(dim * scale_mult))
         half_side = target_size // 2
 
         cx = x + w // 2
-        # Shift center downward (+0.12 * dim) so chin, lips, and lower face are comfortably included
-        cy = y + h // 2 + int(dim * 0.12)
+        # Modest downward shift to ensure full chin/lip coverage without pulling in chest/clothing
+        cy = y + h // 2 + int(dim * 0.05)
 
         new_x = max(0, cx - half_side)
         new_y = max(0, cy - half_side)
-        new_w = min(img_w - new_x, half_side * 2)
-        new_h = min(img_h - new_y, half_side * 2)
+
+        # Shift origin back if crop extends beyond frame boundaries to preserve square dimensions
+        if new_x + target_size > img_w:
+            new_x = max(0, img_w - target_size)
+        if new_y + target_size > img_h:
+            new_y = max(0, img_h - target_size)
+
+        new_w = min(img_w - new_x, target_size)
+        new_h = min(img_h - new_y, target_size)
 
         return (new_x, new_y, new_w, new_h)
 
@@ -254,7 +293,7 @@ class FaceDetector:
             return None
 
         if apply_padding:
-            x, y, w, h = self.expand_box(box, frame_bgr.shape)
+            x, y, w, h = self.expand_box(box, frame_bgr.shape, frame_bgr=frame_bgr)
         else:
             x, y, w, h = box
 

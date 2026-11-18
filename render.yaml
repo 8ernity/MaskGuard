@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: maskguard
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements-render.txt
+    startCommand: uvicorn app.web.server:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.10
+      - key: TF_ENABLE_ONEDNN_OPTS
+        value: "0"

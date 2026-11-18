@@ -54,6 +54,20 @@ class AppConfig:
     def from_dict(cls, data: Dict[str, Any]) -> AppConfig:
         valid_keys = cls.__dataclass_fields__.keys()
         filtered = {k: v for k, v in data.items() if k in valid_keys}
+
+        # Self-healing cross-platform path resolution:
+        # If model_path from settings.json points to a different machine/OS (e.g. Windows D:\ on Linux),
+        # automatically fallback to the local project's model directory.
+        if "model_path" in filtered:
+            p = Path(filtered["model_path"])
+            if not p.is_file():
+                filtered["model_path"] = str(get_default_model_path())
+
+        if "output_dir" in filtered:
+            p = Path(filtered["output_dir"])
+            if not p.is_dir():
+                filtered["output_dir"] = str(get_results_dir())
+
         return cls(**filtered)
 
     def save(self, filepath: Path | str | None = None) -> None:
