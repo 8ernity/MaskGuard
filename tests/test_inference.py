@@ -5,8 +5,6 @@ Verifies multi-face processing, boundary padding, uncertainty thresholding, and 
 
 from pathlib import Path
 import numpy as np
-import pytest
-import cv2
 
 from app.core.face_detector import FaceDetector
 from app.core.mask_classifier import MaskClassifier, FaceDetection
@@ -90,6 +88,14 @@ def test_mask_classifier_calibration(tmp_path: Path):
         assert isinstance(det, FaceDetection)
         assert det.label in ("MASK", "NO MASK", "UNCERTAIN")
         assert 0.0 <= det.confidence <= 1.0
+
+    # Verify uncertain_band does not override a lower user-chosen confidence_threshold (e.g. 0.45)
+    classifier.confidence_threshold = 0.45
+    classifier.uncertain_band = 0.15
+    low_thresh_dets = classifier.classify_crops([crop1, crop2], [(10, 10, 50, 50), (70, 70, 50, 50)])
+    for det in low_thresh_dets:
+        assert det.is_uncertain is False
+        assert det.label in ("MASK", "NO MASK")
 
 
 def test_simple_face_tracker():

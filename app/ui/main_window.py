@@ -5,13 +5,11 @@ Orchestrates sidebar navigation, view switching, and application lifecycle.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QCloseEvent, QIcon
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
-    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,

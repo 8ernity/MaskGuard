@@ -1,8 +1,9 @@
 {
     "theme": "dark",
+    "active_model": "custom_cnn",
     "camera_index": 0,
-    "confidence_threshold": 1.0,
-    "uncertain_band": 0.1,
+    "confidence_threshold": 0.65,
+    "uncertain_band": 0.15,
     "face_scale_factor": 1.1,
     "face_min_neighbors": 5,
     "face_min_size": 35,

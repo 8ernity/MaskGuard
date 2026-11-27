@@ -24,7 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import cv2
 import numpy as np
 import tensorflow as tf
-from sklearn.metrics import confusion_matrix, classification_report, accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score
 
 from app.utils.image_utils import preprocess_face_tensor
 from app.utils.resource_paths import get_default_model_path, get_results_dir, get_model_dir

@@ -6,7 +6,7 @@ Captures webcam frames, routes them through the inference pipeline, and emits Qt
 from __future__ import annotations
 
 import time
-from typing import List, Tuple
+from typing import List
 
 import cv2
 import numpy as np

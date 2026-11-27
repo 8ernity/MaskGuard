@@ -33,7 +33,7 @@ def test_api_status(client: TestClient) -> None:
     data = response.json()
     assert data["status"] == "ready"
     assert data["model_loaded"] is True
-    assert "mask_detector.h5" in data["model_file"]
+    assert data["model_file"] in {"mask_detector.h5", "mask_detector_mobilenetv2.h5"}
 
 
 def test_api_analytics(client: TestClient) -> None:

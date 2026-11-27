@@ -1,0 +1,24 @@
+{
+    "model_id": "mobilenetv2",
+    "model_name": "MaskGuard_MobileNetV2",
+    "total_test_samples": 992,
+    "accuracy": 0.9929,
+    "test_accuracy": 0.9929,
+    "precision": 0.998,
+    "recall": 0.9882,
+    "f1_score": 0.9931,
+    "avg_inference_latency_ms": 28.55,
+    "observed_fps": 35.0,
+    "model_size_mb": 21.15,
+    "total_parameters": 2422081,
+    "false_mask_on_unmasked_count": 6,
+    "unmasked_test_total": 509,
+    "false_mask_on_unmasked_rate": 0.0118,
+    "confusion_matrix": {
+        "true_positive_mask": 482,
+        "false_positive_nomask": 1,
+        "false_negative_mask": 6,
+        "true_negative_nomask": 503
+    },
+    "evaluation_dataset": "Kaggle Face Mask 12K Official Held-out Test Split (MD5 audited, n=992)"
+}

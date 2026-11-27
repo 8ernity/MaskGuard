@@ -23,6 +23,7 @@ class AppConfig:
     theme: str = "dark"  # "dark" | "light"
 
     # Camera & Detection Settings
+    active_model: str = "custom_cnn"  # "custom_cnn" | "mobilenetv2"
     camera_index: int = 0
     confidence_threshold: float = 0.65  # Confidence required to declare confident MASK / NO MASK
     uncertain_band: float = 0.15  # +/- band around 0.5 where prediction is flagged as UNCERTAIN
@@ -67,6 +68,9 @@ class AppConfig:
             p = Path(filtered["output_dir"])
             if not p.is_dir():
                 filtered["output_dir"] = str(get_results_dir())
+
+        if "active_model" in filtered and filtered["active_model"] not in ("custom_cnn", "mobilenetv2"):
+            filtered["active_model"] = "custom_cnn"
 
         return cls(**filtered)
 

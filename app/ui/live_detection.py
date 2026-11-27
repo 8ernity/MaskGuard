@@ -6,8 +6,6 @@ Displays real-time video feed, bounding boxes, confidence tags, FPS HUD, and tel
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List
 
 import cv2
 import numpy as np
@@ -16,7 +14,6 @@ from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,

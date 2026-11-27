@@ -13,6 +13,7 @@ import numpy as np
 
 from app.core.face_detector import FaceDetector
 from app.core.mask_classifier import FaceDetection, MaskClassifier
+from app.core.model_manager import DualModelManager
 from app.utils.config import AppConfig
 from app.utils.image_utils import draw_bounding_box
 
@@ -124,6 +125,7 @@ class InferencePipeline:
         config: AppConfig | None = None,
         face_detector: FaceDetector | None = None,
         mask_classifier: MaskClassifier | None = None,
+        model_manager: DualModelManager | None = None,
     ):
         self.config = config or AppConfig.load()
         self.detector = face_detector or FaceDetector(
@@ -132,14 +134,42 @@ class InferencePipeline:
             min_size=(self.config.face_min_size, self.config.face_min_size),
             padding=self.config.face_padding,
         )
-        self.classifier = mask_classifier or MaskClassifier(
-            model_path=self.config.model_path,
-            confidence_threshold=self.config.confidence_threshold,
-            uncertain_band=self.config.uncertain_band,
-        )
+        if mask_classifier is not None:
+            self.classifier = mask_classifier
+            self.model_manager = model_manager
+        else:
+            self.model_manager = model_manager or DualModelManager(
+                active_model_id=getattr(self.config, "active_model", "custom_cnn"),
+                confidence_threshold=self.config.confidence_threshold,
+                uncertain_band=self.config.uncertain_band,
+                custom_cnn_path=self.config.model_path,
+            )
+            self.classifier = self.model_manager.get_classifier(self.model_manager.active_model_id)
         self.tracker = SimpleFaceTracker()
         self.last_frame_time = time.time()
         self.fps_smoothed = 0.0
+
+    @property
+    def active_model_id(self) -> str:
+        """Return currently active model identifier."""
+        if self.model_manager is not None:
+            return self.model_manager.active_model_id
+        return getattr(self.classifier, "model_id", "custom_cnn")
+
+    def select_model(self, model_id: str) -> Dict[str, Any]:
+        """Switch active model cleanly through DualModelManager."""
+        if self.model_manager is None:
+            raise RuntimeError("DualModelManager is not configured for this pipeline.")
+        info = self.model_manager.select_model(model_id)
+        self.classifier = self.model_manager.get_classifier(model_id)
+        return info
+
+    def update_thresholds(self, confidence_threshold: float, uncertain_band: float) -> None:
+        """Synchronize confidence and uncertainty thresholds across classifier(s)."""
+        if self.model_manager is not None:
+            self.model_manager.update_thresholds(confidence_threshold, uncertain_band)
+        self.classifier.confidence_threshold = confidence_threshold
+        self.classifier.uncertain_band = uncertain_band
 
     def reset_session_stats(self) -> None:
         """Reset tracker and counters for a new detection session."""
@@ -149,6 +179,7 @@ class InferencePipeline:
         self,
         frame_bgr: np.ndarray,
         track_session: bool = True,
+        model_id: str | None = None,
     ) -> Tuple[np.ndarray, List[FaceDetection], Dict[str, Any]]:
         """
         Process a single BGR frame:
@@ -166,6 +197,8 @@ class InferencePipeline:
         inst_fps = 1.0 / dt
         self.fps_smoothed = 0.85 * self.fps_smoothed + 0.15 * inst_fps if self.fps_smoothed > 0 else inst_fps
 
+        used_model_id = model_id or self.active_model_id
+
         if frame_bgr is None or frame_bgr.size == 0:
             return frame_bgr, [], {
                 "faces_in_frame": 0,
@@ -174,6 +207,7 @@ class InferencePipeline:
                 "uncertain_count": 0,
                 "total_unique_faces": self.tracker.total_unique_faces,
                 "fps": round(self.fps_smoothed, 1),
+                "model_id": used_model_id,
             }
 
         annotated = frame_bgr.copy()
@@ -196,7 +230,14 @@ class InferencePipeline:
                     valid_boxes.append(b)
 
             if face_crops:
-                detections = self.classifier.classify_crops(face_crops, valid_boxes)
+                if self.model_manager is not None:
+                    detections = self.model_manager.classify_crops(
+                        face_crops,
+                        valid_boxes,
+                        model_id=used_model_id,
+                    )
+                else:
+                    detections = self.classifier.classify_crops(face_crops, valid_boxes)
 
         # Count classifications
         mask_count = sum(1 for d in detections if d.label == "MASK" and not d.is_uncertain)
@@ -237,6 +278,7 @@ class InferencePipeline:
             "uncertain_count": uncertain_count,
             "total_unique_faces": unique_faces,
             "fps": round(self.fps_smoothed, 1),
+            "model_id": used_model_id,
         }
 
         return annotated, detections, stats

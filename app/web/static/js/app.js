@@ -15,9 +15,17 @@ let smoothFps = 0;
 let renderFrames = 0;
 let lastFpsUpdate = performance.now();
 let displayFps = 30;
-let lastLoggedTime = 0;
 let detectionHistory = [];
 let isCameraFlipped = true; // Mirror camera by default for natural selfie view
+let activeModelId = "custom_cnn";
+let modelGeneration = 1;
+let isSwitchingModel = false;
+const clientSessionId = "sess_" + Math.random().toString(36).slice(2, 10);
+
+const MODEL_LABELS = {
+  custom_cnn: "Custom CNN",
+  mobilenetv2: "MobileNetV2",
+};
 
 const offscreenCanvas = document.createElement("canvas");
 const offscreenCtx = offscreenCanvas.getContext("2d");
@@ -33,9 +41,12 @@ document.addEventListener("DOMContentLoaded", () => {
   soundwaveBars = document.getElementById("soundwave-bars");
 
   initNavigation();
+  initMobileSidebar();
   initControls();
+  initModelSelectors();
   initSettings();
   loadServerSettings();
+  loadModelsCatalog();
   initMediaAnalysis();
   enumerateCameras();
   loadSystemStatus();
@@ -102,11 +113,36 @@ function initNavigation() {
       }
 
       currentTab = tabId;
+      closeMobileSidebar();
       if (window.lucide) {
         lucide.createIcons();
       }
     });
   });
+}
+
+function initMobileSidebar() {
+  const menuBtn = document.getElementById("btn-mobile-menu");
+  const sidebar = document.getElementById("app-sidebar");
+  const backdrop = document.getElementById("mobile-sidebar-backdrop");
+  if (!menuBtn || !sidebar || !backdrop) return;
+
+  menuBtn.addEventListener("click", () => {
+    sidebar.classList.remove("-translate-x-full");
+    backdrop.classList.remove("hidden");
+  });
+  backdrop.addEventListener("click", closeMobileSidebar);
+}
+
+function closeMobileSidebar() {
+  const sidebar = document.getElementById("app-sidebar");
+  const backdrop = document.getElementById("mobile-sidebar-backdrop");
+  if (sidebar && window.innerWidth < 768) {
+    sidebar.classList.add("-translate-x-full");
+  }
+  if (backdrop) {
+    backdrop.classList.add("hidden");
+  }
 }
 
 function updateSliderFill(slider, val) {
@@ -136,19 +172,20 @@ function initControls() {
   stopBtn.addEventListener("click", stopLiveDetection);
   capBtn.addEventListener("click", () => captureSnapshot(true));
 
+  const deviceSelect = document.getElementById("camera-source-select");
+  if (deviceSelect) {
+    deviceSelect.addEventListener("change", () => {
+      if (isDetecting) {
+        stopLiveDetection();
+        startLiveDetection();
+      }
+    });
+  }
+
   if (flipBtn) {
     flipBtn.addEventListener("click", () => {
       isCameraFlipped = !isCameraFlipped;
-      const flipText = document.getElementById("flip-status-text");
-      if (isCameraFlipped) {
-        flipBtn.classList.add("text-indigo-600", "border-indigo-200");
-        flipBtn.classList.remove("text-slate-600");
-        if (flipText) flipText.textContent = "Mirrored";
-      } else {
-        flipBtn.classList.remove("text-indigo-600", "border-indigo-200");
-        flipBtn.classList.add("text-slate-600");
-        if (flipText) flipText.textContent = "Normal";
-      }
+      syncFlipButtonUI();
     });
   }
 
@@ -184,6 +221,115 @@ function initControls() {
   }
 }
 
+function initModelSelectors() {
+  const liveSelect = document.getElementById("live-model-select");
+  const settingsSelect = document.getElementById("settings-model-select");
+  const analyticsSelect = document.getElementById("analytics-model-select");
+
+  if (liveSelect) {
+    liveSelect.addEventListener("change", (e) => switchActiveModel(e.target.value));
+  }
+  if (settingsSelect) {
+    settingsSelect.addEventListener("change", (e) => switchActiveModel(e.target.value));
+  }
+  if (analyticsSelect) {
+    analyticsSelect.addEventListener("change", (e) => loadAnalytics(e.target.value));
+  }
+}
+
+function syncModelSelectorUI(modelId) {
+  const displayName = MODEL_LABELS[modelId] || modelId;
+  const liveSelect = document.getElementById("live-model-select");
+  const settingsSelect = document.getElementById("settings-model-select");
+  const analyticsSelect = document.getElementById("analytics-model-select");
+  const liveBadge = document.getElementById("live-active-model-badge");
+  const settingsBadge = document.getElementById("settings-active-model-badge");
+
+  if (liveSelect) liveSelect.value = modelId;
+  if (settingsSelect) settingsSelect.value = modelId;
+  if (analyticsSelect) analyticsSelect.value = modelId;
+  if (liveBadge) liveBadge.textContent = `Active: ${displayName}`;
+  if (settingsBadge) settingsBadge.textContent = `Active: ${displayName}`;
+}
+
+async function loadModelsCatalog() {
+  try {
+    const res = await fetch("/api/models");
+    const data = await res.json();
+    if (data.active_model) {
+      activeModelId = data.active_model;
+    }
+    const mn = (data.models || []).find((m) => m.model_id === "mobilenetv2");
+    if (mn && !mn.available) {
+      ["live-model-select", "settings-model-select"].forEach((id) => {
+        const sel = document.getElementById(id);
+        const opt = sel ? sel.querySelector('option[value="mobilenetv2"]') : null;
+        if (opt) {
+          opt.disabled = true;
+          opt.textContent = "MobileNetV2 (Not trained yet)";
+        }
+      });
+    }
+    syncModelSelectorUI(activeModelId);
+  } catch (err) {
+    console.warn("Could not load model catalog:", err);
+  }
+}
+
+async function switchActiveModel(newModelId) {
+  if (!newModelId || isSwitchingModel) return;
+  const errBox = document.getElementById("model-switch-error");
+  if (errBox) {
+    errBox.classList.add("hidden");
+    errBox.textContent = "";
+  }
+
+  const prevModelId = activeModelId;
+  isSwitchingModel = true;
+  modelGeneration += 1;
+  // Clear stale overlays immediately so predictions from different models never mix
+  latestDetections = [];
+  activeFaceTracks = [];
+
+  const aiBadge = document.getElementById("overlay-ai-badge");
+  if (aiBadge && isDetecting) aiBadge.textContent = `Loading ${MODEL_LABELS[newModelId] || newModelId}...`;
+
+  try {
+    const res = await fetch("/api/models/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model_id: newModelId }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.detail || `Failed to switch to ${newModelId}`);
+    }
+
+    activeModelId = data.active_model;
+    syncModelSelectorUI(activeModelId);
+    if (aiBadge && isDetecting) {
+      aiBadge.textContent = `AI (${MODEL_LABELS[activeModelId] || activeModelId})`;
+    }
+    loadSystemStatus();
+    loadAnalytics(activeModelId);
+  } catch (err) {
+    console.error("Model switch failed:", err);
+    activeModelId = prevModelId;
+    syncModelSelectorUI(prevModelId);
+    if (errBox) {
+      errBox.textContent = err.message;
+      errBox.classList.remove("hidden");
+    } else {
+      alert(`Model switch failed: ${err.message}`);
+    }
+    if (aiBadge && isDetecting) {
+      aiBadge.textContent = `AI (${MODEL_LABELS[activeModelId] || activeModelId})`;
+    }
+  } finally {
+    isSwitchingModel = false;
+  }
+}
+
 let thresholdTimer = null;
 function debounceUpdateThreshold(val) {
   clearTimeout(thresholdTimer);
@@ -208,33 +354,85 @@ async function enumerateCameras() {
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
     const videoDevices = devices.filter((d) => d.kind === "videoinput");
-    if (videoDevices.length > 0) {
+    const labeledDevices = videoDevices.filter((d) => d.deviceId && d.label);
+    if (labeledDevices.length > 0) {
+      const prevVal = select.value;
       select.innerHTML = "";
-      videoDevices.forEach((device, idx) => {
+
+      const frontOpt = document.createElement("option");
+      frontOpt.value = "facing:user";
+      frontOpt.textContent = "Front Camera (Selfie)";
+      select.appendChild(frontOpt);
+
+      const backOpt = document.createElement("option");
+      backOpt.value = "facing:environment";
+      backOpt.textContent = "Back Camera (Rear)";
+      select.appendChild(backOpt);
+
+      labeledDevices.forEach((device, idx) => {
         const opt = document.createElement("option");
         opt.value = device.deviceId;
         opt.textContent = device.label || `Camera ${idx + 1}`;
         select.appendChild(opt);
       });
+
+      if (prevVal && Array.from(select.options).some((o) => o.value === prevVal)) {
+        select.value = prevVal;
+      }
     }
   } catch (e) {
     console.log("Camera enumeration note:", e);
   }
 }
 
+function syncFlipButtonUI() {
+  const flipBtn = document.getElementById("btn-flip-camera");
+  const flipText = document.getElementById("flip-status-text");
+  if (!flipBtn) return;
+  if (isCameraFlipped) {
+    flipBtn.classList.add("text-indigo-600", "border-indigo-200");
+    flipBtn.classList.remove("text-slate-600");
+    if (flipText) flipText.textContent = "Mirrored";
+  } else {
+    flipBtn.classList.remove("text-indigo-600", "border-indigo-200");
+    flipBtn.classList.add("text-slate-600");
+    if (flipText) flipText.textContent = "Normal";
+  }
+}
+
 // --- Live Webcam Streaming Loop ---
 async function startLiveDetection() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    const protoMsg = window.isSecureContext
+      ? "Your browser does not support camera access."
+      : "Live camera on a phone requires HTTPS (a secure origin). Use your HTTPS deployment URL or an HTTPS tunnel (ngrok / Cloudflare Tunnel), or use 'Upload Image' below which works over HTTP.";
+    alert(`Camera Unavailable: ${protoMsg}`);
+    return;
+  }
+
   const resSelect = document.getElementById("res-selector");
   const [resW, resH] = (resSelect ? resSelect.value : "1280x720").split("x").map(Number);
   const deviceSelect = document.getElementById("camera-source-select");
-  const deviceId = deviceSelect && deviceSelect.value ? { exact: deviceSelect.value } : undefined;
+  const selectedVal = deviceSelect ? deviceSelect.value : "facing:user";
+
+  const videoConstraints = {
+    width: { ideal: resW },
+    height: { ideal: resH },
+  };
+  if (selectedVal === "facing:user") {
+    videoConstraints.facingMode = { ideal: "user" };
+    isCameraFlipped = true;
+    syncFlipButtonUI();
+  } else if (selectedVal === "facing:environment") {
+    videoConstraints.facingMode = { ideal: "environment" };
+    isCameraFlipped = false;
+    syncFlipButtonUI();
+  } else if (selectedVal) {
+    videoConstraints.deviceId = { exact: selectedVal };
+  }
 
   const constraints = {
-    video: {
-      width: { ideal: resW },
-      height: { ideal: resH },
-      deviceId: deviceId,
-    },
+    video: videoConstraints,
     audio: false,
   };
 
@@ -243,9 +441,18 @@ async function startLiveDetection() {
     videoEl.srcObject = webcamStream;
     await videoEl.play();
 
-    // Display canvas matches camera video dimensions
-    displayCanvas.width = videoEl.videoWidth || resW;
-    displayCanvas.height = videoEl.videoHeight || resH;
+    // Populate actual camera labels now that permission has been granted
+    enumerateCameras();
+
+    // Display canvas matches camera video dimensions (handles portrait phone feeds without cropping)
+    const vw = videoEl.videoWidth || resW;
+    const vh = videoEl.videoHeight || resH;
+    displayCanvas.width = vw;
+    displayCanvas.height = vh;
+    const viewport = document.getElementById("viewport-container");
+    if (viewport && vw > 0 && vh > 0) {
+      viewport.style.aspectRatio = `${vw} / ${vh}`;
+    }
 
     // Offscreen canvas: high resolution for crisp facial feature inference (max dimension 640)
     const maxInferDim = 640;
@@ -300,6 +507,8 @@ function stopLiveDetection() {
   cameraPlaceholder.classList.remove("hidden");
   displayCanvas.classList.add("hidden");
   displayCtx.clearRect(0, 0, displayCanvas.width, displayCanvas.height);
+  const viewport = document.getElementById("viewport-container");
+  if (viewport) viewport.style.aspectRatio = "";
 
   document.getElementById("btn-start-camera").classList.remove("opacity-50", "pointer-events-none");
   document.getElementById("btn-stop-camera").classList.add("opacity-50", "pointer-events-none");
@@ -418,10 +627,12 @@ function drawDetections(ctx, detections) {
 
 // Decoupled Background Inference Loop
 async function runInference() {
-  if (!isDetecting || isRequestInProgress) return;
+  if (!isDetecting || isRequestInProgress || isSwitchingModel) return;
   if (!videoEl || videoEl.readyState < videoEl.HAVE_CURRENT_DATA) return;
 
   isRequestInProgress = true;
+  const reqModelId = activeModelId;
+  const reqGen = modelGeneration;
   const tStart = performance.now();
 
   // Capture frame with high quality (0.85) to eliminate DCT block artifacts on mouth and lips
@@ -438,9 +649,26 @@ async function runInference() {
     const res = await fetch("/api/detect/frame", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image: frameData, return_annotated: false }),
+      body: JSON.stringify({
+        image: frameData,
+        return_annotated: false,
+        model_id: reqModelId,
+        session_id: clientSessionId,
+        generation_id: reqGen,
+      }),
     });
     const data = await res.json();
+
+    // Reject stale responses from an earlier model/generation to avoid mixing predictions
+    if (
+      !isDetecting ||
+      isSwitchingModel ||
+      reqGen !== modelGeneration ||
+      reqModelId !== activeModelId ||
+      (data.model_id && data.model_id !== activeModelId)
+    ) {
+      return;
+    }
 
     const tEnd = performance.now();
     const cycleTime = Math.max(1, tEnd - tStart);
@@ -658,11 +886,11 @@ async function captureSnapshot(notify = true) {
     const res = await fetch("/api/detect/frame", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image: frameData, save_snapshot: true }),
+      body: JSON.stringify({ image: frameData, save_snapshot: true, model_id: activeModelId }),
     });
     const data = await res.json();
     if (notify) {
-      alert(`Snapshot captured successfully! Detected ${data.faces_count} faces (${data.mask_count} Masked, ${data.no_mask_count} Unmasked).`);
+      alert(`Snapshot captured with ${MODEL_LABELS[data.model_id] || activeModelId}! Detected ${data.faces_count} faces (${data.mask_count} Masked, ${data.no_mask_count} Unmasked).`);
     }
   } catch (err) {
     console.error("Snapshot error:", err);
@@ -681,23 +909,32 @@ function initMediaAnalysis() {
       const file = e.target.files[0];
       if (!file) return;
 
+      const selectedMid = activeModelId;
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("model_id", selectedMid);
 
-      imgDetails.textContent = "Analyzing image with custom CNN...";
+      imgDetails.textContent = `Analyzing image with ${MODEL_LABELS[selectedMid] || selectedMid}...`;
       imgResultBox.classList.remove("hidden");
 
       try {
-        const res = await fetch("/api/detect/image", { method: "POST", body: formData });
+        const res = await fetch(`/api/detect/image?model_id=${encodeURIComponent(selectedMid)}`, {
+          method: "POST",
+          body: formData,
+        });
         const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || "Image analysis failed");
+        }
         imgPreview.src = data.annotated_image;
+        const usedName = MODEL_LABELS[data.model_id] || data.model_id || selectedMid;
         if (data.faces_count === 0) {
-          imgDetails.innerHTML = `<span class="text-amber-600 font-bold">No face detected</span> in this image. Try an image with a visible, front-facing face or adjust sensitivity in Settings.`;
+          imgDetails.innerHTML = `<span class="text-amber-600 font-bold">No face detected</span> (${usedName}). Try an image with a visible, front-facing face or adjust sensitivity in Settings.`;
         } else {
           const maskPart = `<span class="text-emerald-600 font-bold">${data.mask_count} Masked</span>`;
           const noMaskPart = `<span class="text-rose-500 font-bold">${data.no_mask_count} Without Mask</span>`;
           const uncPart = data.uncertain_count > 0 ? `, <span class="text-amber-500 font-bold">${data.uncertain_count} Uncertain</span>` : '';
-          imgDetails.innerHTML = `<strong>Result:</strong> ${data.faces_count} face(s) detected — ${maskPart}, ${noMaskPart}${uncPart}.`;
+          imgDetails.innerHTML = `<strong>Result (${usedName}):</strong> ${data.faces_count} face(s) detected — ${maskPart}, ${noMaskPart}${uncPart}.`;
         }
       } catch (err) {
         imgDetails.textContent = `Analysis error: ${err.message}`;
@@ -714,15 +951,17 @@ function initMediaAnalysis() {
         alert("Please select a video file first.");
         return;
       }
+      const lockedMid = activeModelId;
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("model_id", lockedMid);
 
       const progBox = document.getElementById("video-progress-box");
       const progStatus = document.getElementById("video-status-text");
       const progPct = document.getElementById("video-percent-text");
       const progBar = document.getElementById("video-bar");
       progBox.classList.remove("hidden");
-      progStatus.textContent = "Uploading video to server...";
+      progStatus.textContent = `Uploading video (${MODEL_LABELS[lockedMid] || lockedMid})...`;
       progPct.textContent = "0%";
       progBar.style.width = "0%";
 
@@ -730,20 +969,24 @@ function initMediaAnalysis() {
       vidBtn.classList.add("opacity-60");
 
       try {
-        const res = await fetch("/api/detect/video", { method: "POST", body: formData });
+        const res = await fetch(`/api/detect/video?model_id=${encodeURIComponent(lockedMid)}`, {
+          method: "POST",
+          body: formData,
+        });
         if (!res.ok) {
           const errData = await res.json().catch(() => ({ detail: res.statusText }));
           throw new Error(errData.detail || "Upload failed");
         }
         const data = await res.json();
         const pollUrl = data.poll_url;
-        progStatus.textContent = "Analyzing video frames...";
+        const jobModelLabel = MODEL_LABELS[data.model_id] || data.model_id || lockedMid;
+        progStatus.textContent = `Analyzing video frames (${jobModelLabel})...`;
 
         const interval = setInterval(async () => {
           try {
             const pollRes = await fetch(pollUrl);
             const job = await pollRes.json();
-            progStatus.textContent = `Frame ${job.current_frame} / ${job.total_frames || "?"} (${job.fps || 0} FPS)`;
+            progStatus.textContent = `[${jobModelLabel}] Frame ${job.current_frame} / ${job.total_frames || "?"} (${job.fps || 0} FPS)`;
             progPct.textContent = `${job.progress}%`;
             progBar.style.width = `${job.progress}%`;
 
@@ -751,7 +994,7 @@ function initMediaAnalysis() {
               clearInterval(interval);
               vidBtn.disabled = false;
               vidBtn.classList.remove("opacity-60");
-              progStatus.innerHTML = `Complete! <a href="${job.download_url}" class="text-purple-600 underline font-bold ml-1" download>Download Processed Video</a>`;
+              progStatus.innerHTML = `Complete (${jobModelLabel})! <a href="${job.download_url}" class="text-purple-600 underline font-bold ml-1" download>Download Processed Video</a>`;
             } else if (job.status === "failed") {
               clearInterval(interval);
               vidBtn.disabled = false;
@@ -801,38 +1044,109 @@ async function loadSystemStatus() {
   try {
     const res = await fetch("/api/status");
     const data = await res.json();
+    if (data.active_model) {
+      activeModelId = data.active_model;
+      syncModelSelectorUI(activeModelId);
+    }
     if (data.model_file) {
       const fEl = document.getElementById("dash-model-file");
       if (fEl) fEl.textContent = data.model_file;
+    }
+    const subEl = document.getElementById("dash-model-subtitle");
+    if (subEl && data.architecture) {
+      const dims = Array.isArray(data.input_shape) ? `${data.input_shape[0]}×${data.input_shape[1]}` : "";
+      const params = data.total_parameters ? `${Math.round(data.total_parameters / 1000)}k params` : "";
+      subEl.textContent = `${MODEL_LABELS[activeModelId] || data.architecture} (${[dims, params].filter(Boolean).join(", ")})`;
     }
   } catch (e) {
     console.log("Status note:", e);
   }
 }
 
-async function loadAnalytics() {
+async function loadAnalytics(modelId = null) {
   try {
-    const res = await fetch("/api/analytics");
+    const query = modelId ? `?model_id=${encodeURIComponent(modelId)}` : "";
+    const res = await fetch(`/api/analytics${query}`);
     const data = await res.json();
-    if (data.metrics) {
-      const acc = (data.metrics.test_accuracy * 100).toFixed(1);
-      const prec = (data.metrics.precision * 100).toFixed(1);
-      const rec = (data.metrics.recall * 100).toFixed(1);
-      const f1 = (data.metrics.f1_score * 100).toFixed(1);
+
+    const titleEl = document.getElementById("analytics-model-title");
+    const fileEl = document.getElementById("analytics-model-file");
+    const cmImg = document.getElementById("analytics-cm-img");
+    const curvesImg = document.getElementById("analytics-curves-img");
+    const aSel = document.getElementById("analytics-model-select");
+
+    const mid = data.model_id || modelId || activeModelId;
+    if (aSel) aSel.value = mid;
+    if (titleEl) {
+      titleEl.textContent = `${MODEL_LABELS[mid] || data.display_name || mid} Model & Performance Metrics`;
+    }
+    if (fileEl) {
+      fileEl.textContent = mid === "mobilenetv2" ? "models/mobilenetv2/mask_detector_mobilenetv2.h5" : "models/mask_detector.h5";
+    }
+    if (cmImg && data.confusion_matrix_url) cmImg.src = `${data.confusion_matrix_url}?t=${Date.now()}`;
+    if (curvesImg && data.training_curves_url) curvesImg.src = `${data.training_curves_url}?t=${Date.now()}`;
+
+    const mAcc = document.getElementById("model-metric-acc");
+    const mPrec = document.getElementById("model-metric-prec");
+    const mRec = document.getElementById("model-metric-rec");
+    const mF1 = document.getElementById("model-metric-f1");
+
+    if (data.metrics && data.status === "verified") {
+      const acc = ((data.metrics.test_accuracy ?? data.metrics.accuracy) * 100).toFixed(2);
+      const prec = (data.metrics.precision * 100).toFixed(2);
+      const rec = (data.metrics.recall * 100).toFixed(2);
+      const f1 = (data.metrics.f1_score * 100).toFixed(2);
 
       const dAcc = document.getElementById("dash-accuracy");
-      if (dAcc) dAcc.textContent = `${acc}%`;
+      if (dAcc && (!modelId || modelId === activeModelId)) dAcc.textContent = `${acc}%`;
 
-      const mAcc = document.getElementById("model-metric-acc");
       if (mAcc) mAcc.textContent = `${acc}%`;
-      const mPrec = document.getElementById("model-metric-prec");
       if (mPrec) mPrec.textContent = `${prec}%`;
-      const mRec = document.getElementById("model-metric-rec");
       if (mRec) mRec.textContent = `${rec}%`;
-      const mF1 = document.getElementById("model-metric-f1");
       if (mF1) mF1.textContent = `${f1}%`;
+    } else {
+      if (mAcc) mAcc.textContent = "Not evaluated";
+      if (mPrec) mPrec.textContent = "Not evaluated";
+      if (mRec) mRec.textContent = "Not evaluated";
+      if (mF1) mF1.textContent = "Not evaluated";
     }
+
+    renderComparisonTable(data.comparison);
   } catch (e) {
     console.log("Analytics note:", e);
   }
+}
+
+function renderComparisonTable(comparison) {
+  const tbody = document.getElementById("comparison-table-body");
+  if (!tbody || !comparison) return;
+
+  const cnn = comparison.custom_cnn || {};
+  const mn = comparison.mobilenetv2 || {};
+  const cMet = cnn.metrics;
+  const mMet = mn.metrics;
+
+  const fmtPct = (m, k) => (m && m[k] !== undefined ? `${(m[k] * 100).toFixed(2)}%` : "Not evaluated");
+  const fmtVal = (m, k, suffix = "") => (m && m[k] !== undefined && m[k] !== null ? `${m[k]}${suffix}` : "Not evaluated");
+
+  const rows = [
+    ["Accuracy (Held-Out Test)", fmtPct(cMet, "accuracy"), fmtPct(mMet, "accuracy")],
+    ["Precision", fmtPct(cMet, "precision"), fmtPct(mMet, "precision")],
+    ["Recall", fmtPct(cMet, "recall"), fmtPct(mMet, "recall")],
+    ["F1-Score", fmtPct(cMet, "f1_score"), fmtPct(mMet, "f1_score")],
+    ["False MASK on Unmasked", fmtVal(cMet, "false_mask_on_unmasked_count"), fmtVal(mMet, "false_mask_on_unmasked_count")],
+    ["Avg Latency (CPU)", fmtVal(cMet, "avg_inference_latency_ms", " ms"), fmtVal(mMet, "avg_inference_latency_ms", " ms")],
+    ["Model Size", fmtVal(cMet, "model_size_mb", " MB"), fmtVal(mMet, "model_size_mb", " MB")],
+  ];
+
+  tbody.innerHTML = rows
+    .map(
+      ([label, v1, v2]) => `
+      <tr class="hover:bg-white/60">
+        <td class="py-2.5 px-4 font-bold text-slate-800">${label}</td>
+        <td class="py-2.5 px-4">${v1}</td>
+        <td class="py-2.5 px-4">${v2}</td>
+      </tr>`
+    )
+    .join("");
 }

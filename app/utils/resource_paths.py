@@ -66,6 +66,33 @@ def get_model_metadata_path() -> Path:
     return get_model_dir() / "model_metadata.json"
 
 
+def get_mobilenetv2_dir() -> Path:
+    """Directory storing MobileNetV2 weights, metadata, and evaluation artifacts."""
+    path = get_model_dir() / "mobilenetv2"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def get_mobilenetv2_model_path() -> Path:
+    """Path to the trained MobileNetV2 model (.h5)."""
+    return get_mobilenetv2_dir() / "mask_detector_mobilenetv2.h5"
+
+
+def get_mobilenetv2_class_mapping_path() -> Path:
+    """Path to MobileNetV2 class_mapping.json."""
+    return get_mobilenetv2_dir() / "class_mapping.json"
+
+
+def get_mobilenetv2_metadata_path() -> Path:
+    """Path to MobileNetV2 model_metadata.json."""
+    return get_mobilenetv2_dir() / "model_metadata.json"
+
+
+def get_mobilenetv2_evaluation_path() -> Path:
+    """Path to MobileNetV2 evaluation_metrics.json."""
+    return get_mobilenetv2_dir() / "evaluation_metrics.json"
+
+
 def get_config_path() -> Path:
     """Path to persistent user settings JSON."""
     return get_project_root() / "settings.json"

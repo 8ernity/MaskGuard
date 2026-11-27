@@ -39,13 +39,10 @@ from app.utils.resource_paths import (
     get_dataset_dir,
     get_default_model_path,
     get_results_dir,
-    get_class_mapping_path,
 )
 from training.prepare_dataset import (
     load_dataset_splits,
-    create_dataset_splits,
     load_and_preprocess_image,
-    load_class_mapping,
 )
 
 

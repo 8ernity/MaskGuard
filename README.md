@@ -6,7 +6,7 @@
   ### Autonomous Real-Time Face Mask Compliance & Deep Learning Vision Platform
 
   <p>
-    <strong>Industrial-grade Computer Vision and Deep Learning system designed for automated human face mask compliance monitoring. Powered by a custom 3-block Convolutional Neural Network (CNN) trained from scratch on 11,792 faces from Kaggle, integrated with OpenCV real-time video processing pipelines, dual-boundary uncertainty calibration, and a claymorphic dashboard interface.</strong>
+    <strong>Industrial-grade Computer Vision and Deep Learning system designed for automated human face mask compliance monitoring. Features Dual AI Model Selection—switching seamlessly between MaskGuard's custom 4-block Spatial CNN trained from scratch (128×128) and an ImageNet-pretrained MobileNetV2 transfer-learning classifier (224×224)—paired with OpenCV Haar face detection, independent preprocessing, and a claymorphic FastAPI dashboard.</strong>
   </p>
 
   <p>
@@ -21,7 +21,8 @@
     <a href="https://fastapi.tiangolo.com"><img src="https://img.shields.io/badge/Backend-FastAPI_0.110+-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI" /></a>
     <a href="https://www.python.org"><img src="https://img.shields.io/badge/Language-Python_3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" /></a>
     <a href="https://www.kaggle.com"><img src="https://img.shields.io/badge/Dataset-Kaggle_~12K_Images-20BEFF?style=for-the-badge&logo=kaggle&logoColor=white" alt="Kaggle Dataset" /></a>
-    <a href="#-empirical-evaluation--verified-confusion-matrix"><img src="https://img.shields.io/badge/Test_Accuracy-94.15%25-10B981?style=for-the-badge" alt="Test Accuracy" /></a>
+    <a href="#-empirical-evaluation--verified-confusion-matrix"><img src="https://img.shields.io/badge/Custom_CNN-96.37%25-10B981?style=for-the-badge" alt="Custom CNN Accuracy" /></a>
+    <a href="#-dual-ai-model-architecture-custom-cnn--mobilenetv2"><img src="https://img.shields.io/badge/MobileNetV2-99.29%25-6366F1?style=for-the-badge" alt="MobileNetV2 Accuracy" /></a>
   </p>
 
 </div>
@@ -42,6 +43,7 @@
 - [🔌 Comprehensive REST API Reference](#-comprehensive-rest-api-reference)
 - [🛠️ Tech Stack Matrix](#️-tech-stack-matrix)
 - [🚀 Quickstart & Installation](#-quickstart--installation)
+- [🧠 Dual AI Model Architecture (Custom CNN + MobileNetV2)](#-dual-ai-model-architecture-custom-cnn--mobilenetv2)
 - [🧪 Automated Verification Test Suite](#-automated-verification-test-suite)
 - [📁 Repository Directory Structure](#-repository-directory-structure)
 - [⚖️ Ethics, Privacy & License](#️-ethics-privacy--license)
@@ -439,31 +441,90 @@ python main.py
 
 ---
 
-## 🧪 Automated Verification Test Suite
+## 🧠 Dual AI Model Architecture (Custom CNN + MobileNetV2)
 
-MaskGuard incorporates a comprehensive test suite covering CNN forward passes, OpenCV bounding box expansion, boundary clamping, and web APIs.
+MaskGuard supports two independently trained and user-selectable classifiers managed through `app/core/model_manager.py` (`DualModelManager`), with **zero YOLO** and **no automatic ensemble mixing**:
+
+### 1. Custom CNN (`custom_cnn` — Default)
+- **Origin:** Original MaskGuard convolutional neural network trained **from scratch** (`training/model_architecture.py`), preserved untouched at `models/mask_detector.h5`.
+- **Architecture:** 4 Conv2D-BN-ReLU-MaxPool blocks (`32 -> 64 -> 128 -> 128`) + $1\times 1$ spatial topology projection (`32` filters) + `Flatten` ($2,048$ features) + `Dense(128, L2=1e-4)` + `Dropout(0.4)` + `Dense(1, sigmoid)`.
+- **Parameters & Size:** **508,417** parameters (`5.90 MB`).
+- **Preprocessing:** `preprocess_face_tensor` — `128×128` RGB `float32` scaled strictly to **$[0.0, 1.0]$** (`/ 255.0`).
+
+### 2. MobileNetV2 Transfer Learning (`mobilenetv2`)
+- **Origin:** ImageNet-pretrained `MobileNetV2` backbone (`include_top=False`) with a custom binary classification head (`training/mobilenetv2_architecture.py`), stored separately at `models/mobilenetv2/mask_detector_mobilenetv2.h5`.
+- **Architecture:** `MobileNetV2(alpha=1.0, weights="imagenet")` (`training=False`) -> `GlobalAveragePooling2D` -> `Dense(128, relu)` -> `Dropout(0.3)` -> `Dense(1, sigmoid)`.
+- **Parameters & Size:** **2,422,081** total parameters (`1,512,577` trainable in Stage 2, `21.15 MB`).
+- **Preprocessing:** `preprocess_face_mobilenetv2` — `224×224` RGB `float32` initially in $[0, 255]$ scaled via `tf.keras.applications.mobilenet_v2.preprocess_input` (`x / 127.5 - 1.0`) to **$[-1.0, 1.0]$** (never normalized twice).
+- **Two-Stage Transfer Learning Methodology:**
+  1. **Stage 1 (Feature Extraction):** Backbone frozen (`lr = 1e-4`), training the dense classification head with training-only augmentations (horizontal flip, brightness/contrast jitter) and `EarlyStopping` + `ReduceLROnPlateau`.
+  2. **Stage 2 (Controlled Fine-Tuning):** Unfreezes top `25` non-BatchNorm layers while locking all `BatchNormalization` layers in inference mode (`trainable = False`), fine-tuning at `lr = 1e-5`.
+
+### Verified Dual-Model Comparison (Identical 992-Sample Held-Out Test Set, Zero Leakage)
+
+All splits were MD5-audited (`Train: 9,828`, `Validation: 800`, `Test: 992`; 65 cross-split duplicates removed).
+
+| Metric | Custom CNN (`custom_cnn`) | MobileNetV2 (`mobilenetv2`) |
+|---|---|---|
+| **Input Resolution & Range** | `128×128` RGB, $[0.0, 1.0]$ | `224×224` RGB, $[-1.0, 1.0]$ |
+| **Test Accuracy ($n = 992$)** | **96.37%** | **99.29%** |
+| **Precision** | 93.72% | **99.80%** |
+| **Recall (`without_mask`)** | **99.61%** | 98.82% |
+| **F1-Score** | 96.57% | **99.31%** |
+| **False `MASK` on Unmasked Faces** | **2 / 509 (0.39%)** | 6 / 509 (1.18%) |
+| **Avg CPU Inference Latency** | **9.91 ms (100.9 FPS)** | 28.55 ms (35.0 FPS) |
+| **Model Artifact Size** | **5.90 MB** (508,417 params) | 21.15 MB (2,422,081 params) |
+
+### Training, Evaluation & Model Switching Commands
 
 ```powershell
-pytest tests/ -v
+# 1. Explicit Kaggle dataset download (only if dataset/ is missing)
+.venv\Scripts\python.exe training/prepare_dataset.py --download
+
+# 2. Train MobileNetV2 (Stage 1 feature extraction + Stage 2 fine-tuning)
+.venv\Scripts\python.exe training/train_mobilenetv2.py --stage1-epochs 2 --stage2-epochs 2 --batch-size 16
+
+# 3. Independent side-by-side benchmark (both models on held-out test split + latency)
+.venv\Scripts\python.exe scripts/evaluate_dual_models.py
 ```
 
-### Verified Test Suite Breakdown (22 / 22 Passing)
+- **Selecting a Model:** Switch between `Custom CNN` and `MobileNetV2` directly in the **Live Detection Controls** panel, the **Settings** tab, or via `POST /api/models/select` (`{"model_id": "mobilenetv2"}`). Active video jobs lock their starting `model_id` for job duration, and live frames discard stale asynchronous responses across model switches.
+- **Model API Endpoints:** `GET /api/models`, `GET /api/models/active`, `POST /api/models/select`, and model-scoped `GET /api/analytics?model_id=<id>`.
 
+### Known Limitations
+- **MobileNetV2 CPU Latency:** `MobileNetV2` runs ~2.9× slower on CPU (`28.55 ms` vs `9.91 ms` for `Custom CNN`) due to higher `224×224` input resolution and `2.42M` parameters.
+- **Extreme Low Light / Steep Profile Angles:** OpenCV Haar Cascades (`haarcascade_frontalface_alt2.xml`) are optimized for frontal faces; severe side profiles (`>45°`) or heavy backlit shadows can miss face boxes or lower classification confidence.
+- **Dataset Distribution Scope:** Both models are trained on the 12K Kaggle face-mask dataset (`WithMask` / `WithoutMask`); unusual non-standard face coverings or heavy facial occlusions (hands/scarves) may trigger the `UNCERTAIN` band depending on your configured threshold.
+
+---
+
+## 🧪 Automated Verification Test Suite
+
+MaskGuard incorporates a comprehensive test suite covering dual-model preprocessing, MobileNetV2 `.h5` reload fidelity, `DualModelManager` missing-artifact safety, OpenCV bounding box expansion, security checks, and web APIs.
+
+```powershell
+.venv\Scripts\pytest -v
 ```
+
+### Verified Test Suite Breakdown (38 / 38 Passing)
+
+```text
+tests/test_dual_models.py .......                                         [PASS]
 tests/test_inference.py ......                                            [PASS]
 tests/test_model.py ....                                                  [PASS]
 tests/test_preprocessing.py ......                                        [PASS]
+tests/test_security.py ..........                                         [PASS]
 tests/test_web_api.py .....                                               [PASS]
-tests/test_gui_startup.py .                                               [PASS]
 
-======================== 22 passed in 18.42s ========================
+======================== 38 passed in 48.55s ========================
 ```
 
-- **`test_model.py`:** Validates model layer sequence, parameter non-negativity, and `.h5` reloading.
-- **`test_inference.py`:** Tests Haar cascade detection, aspect ratio expansion, and centroid tracking.
-- **`test_preprocessing.py`:** Verifies color channel conversion, normalization bounds $[0.0, 1.0]$, and data generator batching.
-- **`test_web_api.py`:** Tests FastAPI endpoints `/api/status`, `/api/detect/frame`, and `/api/detect/image`.
-- **`test_gui_startup.py`:** Offscreen Qt smoke test verifying all views and theme engines.
+- **`test_dual_models.py`:** Validates Custom CNN vs MobileNetV2 preprocessing parity, MobileNetV2 build & `.h5` reload, graceful missing-file handling without silent fallback, model selection API & persistence, locked video `model_id`, and real labeled test-set accuracy.
+- **`test_model.py`:** Validates Custom CNN layer sequence, parameter shapes, and `.h5` reloading.
+- **`test_inference.py`:** Tests Haar cascade detection, aspect ratio expansion, uncertainty calibration, and centroid tracking.
+- **`test_preprocessing.py`:** Verifies color channel conversion, normalization bounds $[0.0, 1.0]$, and drawing overlays.
+- **`test_security.py`:** Validates security headers, CORS restrictions, upload magic-bytes validation, and path traversal containment.
+- **`test_web_api.py`:** Tests FastAPI endpoints `/api/status`, `/api/analytics`, `/api/settings`, and `/api/detect/frame`.
 
 ---
 

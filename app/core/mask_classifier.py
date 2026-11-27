@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
 
-import cv2
 import numpy as np
 import tensorflow as tf
 
@@ -29,13 +28,17 @@ class FaceDetection:
     confidence: float              # 0.0 to 1.0
     raw_score: float               # Raw sigmoid output [0.0, 1.0]
     is_uncertain: bool             # Flag indicating low confidence or ambiguous boundary
+    model_id: str = "custom_cnn"   # Model identifier that produced this prediction
 
 
 class MaskClassifier:
     """
-    CNN inference engine for cropped face regions.
+    Custom CNN inference engine for cropped face regions.
     Reuses a single compiled Keras model instance.
     """
+
+    model_id: str = "custom_cnn"
+    display_name: str = "Custom CNN"
 
     def __init__(
         self,
@@ -169,7 +172,6 @@ class MaskClassifier:
         for idx, orig_idx in enumerate(valid_indices):
             raw_val = float(raw_predictions[idx])
             box = boxes[orig_idx]
-            crop_bgr = face_crops[orig_idx]
 
             # Genuine CNN output: No ad-hoc heuristics or probability boosting
 
@@ -189,10 +191,14 @@ class MaskClassifier:
                 conf = nomask_prob
 
             # Check uncertainty conditions:
-            # 1. Close to decision boundary 0.5 within uncertainty band
-            # 2. Or confidence fails user-defined confidence threshold
+            # Ensure uncertain_band never overrides a lower user-chosen confidence_threshold
+            # (since conf = 0.5 + abs(raw_val - 0.5), any threshold <= 0.5 disables uncertainty).
+            effective_band = min(
+                self.uncertain_band,
+                max(0.0, self.confidence_threshold - 0.5),
+            )
             is_uncertain = (
-                abs(raw_val - 0.5) < self.uncertain_band
+                abs(raw_val - 0.5) < effective_band
                 or conf < self.confidence_threshold
             )
 
@@ -208,7 +214,11 @@ class MaskClassifier:
                     confidence=conf,
                     raw_score=raw_val,
                     is_uncertain=is_uncertain,
+                    model_id=self.model_id,
                 )
             )
 
         return detections
+
+
+CustomCNNClassifier = MaskClassifier

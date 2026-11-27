@@ -19,7 +19,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import cv2
 import numpy as np
 import tensorflow as tf
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, precision_score, recall_score, f1_score
@@ -31,7 +30,7 @@ from app.utils.resource_paths import (
     get_model_metadata_path,
     get_results_dir,
 )
-from training.evaluate import plot_confusion_matrix, plot_training_history
+from training.evaluate import plot_confusion_matrix
 from training.prepare_dataset import save_class_mapping
 
 

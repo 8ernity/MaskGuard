@@ -81,7 +81,7 @@ def preprocess_face_tensor(
     target_size: Tuple[int, int] = (128, 128),
 ) -> np.ndarray:
     """
-    Canonical, unified preprocessing function shared identically across:
+    Canonical, unified preprocessing function for the Custom CNN, shared identically across:
     - Training data generation
     - Validation and evaluation
     - Live webcam inference
@@ -106,6 +106,35 @@ def preprocess_face_tensor(
     resized = cv2.resize(face_rgb, target_size, interpolation=cv2.INTER_AREA)
     normalized = resized.astype(np.float32) / 255.0
     return normalized
+
+
+def preprocess_face_mobilenetv2(
+    face_bgr: np.ndarray,
+    target_size: Tuple[int, int] = (224, 224),
+) -> np.ndarray:
+    """
+    Canonical preprocessing pipeline for MobileNetV2 transfer learning.
+    Shared identically across training, validation, testing, and inference.
+
+    Pipeline:
+    1. Validate input dimensions.
+    2. Convert 1-channel / 2D grayscale to 3-channel BGR.
+    3. Convert OpenCV BGR to RGB.
+    4. Resize to target_size (224x224) using INTER_AREA.
+    5. Cast to float32 in [0.0, 255.0] and apply MobileNetV2 scaling: (x / 127.5) - 1.0 -> [-1.0, 1.0].
+
+    Never normalize twice.
+    """
+    if face_bgr is None or face_bgr.size == 0:
+        raise ValueError("Cannot preprocess an empty face image.")
+
+    if len(face_bgr.shape) == 2:
+        face_bgr = cv2.cvtColor(face_bgr, cv2.COLOR_GRAY2BGR)
+
+    face_rgb = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB)
+    resized = cv2.resize(face_rgb, target_size, interpolation=cv2.INTER_AREA)
+    scaled = (resized.astype(np.float32) / 127.5) - 1.0
+    return scaled
 
 
 def get_detection_color(label: str, is_uncertain: bool = False) -> Tuple[int, int, int]:

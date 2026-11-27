@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Callable
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -21,11 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.utils.config import AppConfig
-from app.utils.resource_paths import (
-    get_default_model_path,
-    get_model_metadata_path,
-    get_results_dir,
-)
+from app.utils.resource_paths import get_results_dir
 from app.core.camera_worker import CameraWorker
 
 

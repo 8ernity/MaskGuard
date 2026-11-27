@@ -35,11 +35,14 @@ def process_video_file(
     pipeline: InferencePipeline,
     progress_callback: Optional[Callable[[int, int, float], None]] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
+    model_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Pure Python headless video processor for web API and background tasks.
-    Reads input video frame-by-frame, annotates faces, and exports to output_path.
+    Reads input video frame-by-frame, annotates faces using the locked `model_id`,
+    and exports to output_path.
     """
+    locked_model_id = model_id or pipeline.active_model_id
     input_path = Path(input_path)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -89,7 +92,11 @@ def process_video_file(
                 break
 
             current_frame += 1
-            annotated, detections, stats = pipeline.process_frame(frame, track_session=False)
+            annotated, detections, stats = pipeline.process_frame(
+                frame,
+                track_session=False,
+                model_id=locked_model_id,
+            )
             writer.write(annotated)
 
             now = time.time()
@@ -108,6 +115,7 @@ def process_video_file(
         "fps": fps,
         "width": width,
         "height": height,
+        "model_id": locked_model_id,
     }
 
 

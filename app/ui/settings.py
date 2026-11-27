@@ -5,9 +5,6 @@ Controls camera selection, hyperparameters, model paths, theme, and persistence.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Callable
-
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,

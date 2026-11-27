@@ -10,7 +10,7 @@ from typing import List
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QImage, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,

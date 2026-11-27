@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict
 
 from PySide6.QtCore import Qt, QThread, Signal, Slot
 from PySide6.QtGui import QPixmap
@@ -28,8 +27,6 @@ from PySide6.QtWidgets import (
 from app.utils.config import AppConfig
 from app.utils.resource_paths import (
     get_dataset_dir,
-    get_default_model_path,
-    get_model_metadata_path,
     get_results_dir,
 )
 from training.evaluate import evaluate_model

@@ -4,7 +4,6 @@ Unit tests for custom CNN architecture creation, forward inference, .h5 serializ
 
 from pathlib import Path
 import numpy as np
-import pytest
 import tensorflow as tf
 
 from training.model_architecture import (

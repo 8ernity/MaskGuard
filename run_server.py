@@ -10,6 +10,7 @@ import os
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -27,7 +28,9 @@ os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
 def _launch_browser_when_ready(url: str = "http://localhost:8000", max_wait: int = 40) -> None:
     """Polls server readiness in background and launches the default browser."""
-    poll_url = "http://127.0.0.1:8000/api/status"
+    parsed = urllib.parse.urlparse(url)
+    port = parsed.port or 8000
+    poll_url = f"http://127.0.0.1:{port}/api/status"
     start_time = time.time()
     
     while time.time() - start_time < max_wait:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import threading
 from typing import List, Tuple
 
 import cv2
@@ -77,6 +78,24 @@ class FaceDetector:
             alt_path = ""
         self.classifier_alt = cv2.CascadeClassifier(alt_path) if alt_path else None
 
+        # Modern OpenCV YuNet DNN face detector (handles masks, head tilt, and lighting changes)
+        self._yunet_lock = threading.Lock()
+        self.yunet = None
+        yunet_file = assets_dir / "face_detection_yunet_2023mar.onnx"
+        if yunet_file.is_file() and hasattr(cv2, "FaceDetectorYN"):
+            try:
+                self.yunet = cv2.FaceDetectorYN.create(
+                    str(yunet_file),
+                    "",
+                    (320, 320),
+                    score_threshold=0.58,
+                    nms_threshold=0.30,
+                    top_k=5000,
+                )
+            except Exception as exc:
+                print(f"[FaceDetector] YuNet init warning (falling back to Haar): {exc}")
+                self.yunet = None
+
     def update_parameters(
         self,
         scale_factor: float | None = None,
@@ -105,93 +124,142 @@ class FaceDetector:
 
         h, w = frame_bgr.shape[:2]
 
-        # Convert to grayscale for Haar detection
-        if len(frame_bgr.shape) == 3:
-            gray_orig = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-        else:
-            gray_orig = frame_bgr
-
-        # Adaptive resolution downsampling: downscale large frames (e.g. 720p/1080p) to max width 640 for 5-8x faster detection
+        # Adaptive resolution downsampling: downscale large frames (e.g. 720p/1080p) to max dim 640 for speed
         max_dim = 640
         if max(h, w) > max_dim:
             scale = max_dim / float(max(h, w))
             small_w, small_h = max(1, int(w * scale)), max(1, int(h * scale))
-            gray = cv2.resize(gray_orig, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+            proc_bgr = cv2.resize(frame_bgr, (small_w, small_h), interpolation=cv2.INTER_LINEAR) if len(frame_bgr.shape) == 3 else cv2.cvtColor(cv2.resize(frame_bgr, (small_w, small_h), interpolation=cv2.INTER_LINEAR), cv2.COLOR_GRAY2BGR)
             scaled_min_size = (max(20, int(self.min_size[0] * scale)), max(20, int(self.min_size[1] * scale)))
         else:
             scale = 1.0
-            gray = gray_orig
+            proc_bgr = frame_bgr if len(frame_bgr.shape) == 3 else cv2.cvtColor(frame_bgr, cv2.COLOR_GRAY2BGR)
             scaled_min_size = self.min_size
 
-        # Pass 1: Primary Alt2 detector (Gentle AdaBoost - centered, symmetrical, pattern-resistant)
-        faces = ()
-        if self.classifier_alt2 is not None and not self.classifier_alt2.empty():
-            faces = self.classifier_alt2.detectMultiScale(
-                gray,
-                scaleFactor=self.scale_factor,
-                minNeighbors=self.min_neighbors,
-                minSize=scaled_min_size,
-                flags=cv2.CASCADE_SCALE_IMAGE,
-            )
+        # Primary Modern OpenCV YuNet DNN Pass: detects masked, tilted, and challenging faces accurately
+        if self.yunet is not None:
+            ph, pw = proc_bgr.shape[:2]
+            with self._yunet_lock:
+                self.yunet.setInputSize((pw, ph))
+                _, yunet_faces = self.yunet.detect(proc_bgr)
 
-        # Pass 2: Frontalface Default detector fallback if Alt2 found no faces
-        if len(faces) == 0 and self.classifier is not None and not self.classifier.empty():
-            faces = self.classifier.detectMultiScale(
-                gray,
-                scaleFactor=self.scale_factor,
-                minNeighbors=self.min_neighbors,
-                minSize=scaled_min_size,
-                flags=cv2.CASCADE_SCALE_IMAGE,
-            )
+            if yunet_faces is not None and len(yunet_faces) > 0:
+                inv_scale = 1.0 / scale if scale != 1.0 else 1.0
+                yunet_boxes: List[Tuple[int, int, int, int]] = []
+                for det_row in yunet_faces:
+                    rx, ry, rbw, rbh = float(det_row[0]), float(det_row[1]), float(det_row[2]), float(det_row[3])
+                    x = rx * inv_scale
+                    y = ry * inv_scale
+                    bw = rbw * inv_scale
+                    bh = rbh * inv_scale
+                    if max(bw, bh) < max(20, self.min_size[0] * 0.7):
+                        continue
+                    # Normalize oval YuNet face box into centered upper-face square matching dataset crop proportions
+                    sdim = int(round(min(bw * 1.15, (bw + bh) * 0.52)))
+                    sdim = max(20, min(sdim, w, h))
+                    cx = x + bw / 2.0
+                    cy = y + bh * 0.48
+                    sx = max(0, min(int(round(cx - sdim / 2.0)), w - sdim))
+                    sy = max(0, min(int(round(cy - sdim / 2.0)), h - sdim))
+                    yunet_boxes.append((sx, sy, sdim, sdim))
+                if yunet_boxes:
+                    return yunet_boxes
 
-        # Pass 3: Sensitive fallback for stylized, difficult, or dim faces
-        if len(faces) == 0:
-            relaxed_neighbors = max(3, self.min_neighbors - 3)
-            relaxed_size = (max(24, int(scaled_min_size[0] * 0.65)), max(24, int(scaled_min_size[1] * 0.65)))
-            if self.classifier_alt2 is not None and not self.classifier_alt2.empty():
-                faces = self.classifier_alt2.detectMultiScale(
-                    gray,
-                    scaleFactor=1.05,
-                    minNeighbors=relaxed_neighbors,
-                    minSize=relaxed_size,
-                    flags=cv2.CASCADE_SCALE_IMAGE,
-                )
-            if len(faces) == 0 and self.classifier is not None and not self.classifier.empty():
-                faces = self.classifier.detectMultiScale(
-                    gray,
-                    scaleFactor=1.05,
-                    minNeighbors=relaxed_neighbors,
-                    minSize=relaxed_size,
-                    flags=cv2.CASCADE_SCALE_IMAGE,
-                )
-
-        if len(faces) == 0:
-            return []
-
-        # Map bounding box coordinates back to full-resolution space
-        if scale != 1.0:
-            inv_scale = 1.0 / scale
-            raw_boxes = [
-                (
-                    int(round(x * inv_scale)),
-                    int(round(y * inv_scale)),
-                    int(round(box_w * inv_scale)),
-                    int(round(box_h * inv_scale)),
-                )
-                for (x, y, box_w, box_h) in faces
-            ]
+        # Fallback: Haar Cascade multi-pass pipeline
+        if len(frame_bgr.shape) == 3:
+            gray = cv2.cvtColor(proc_bgr, cv2.COLOR_BGR2GRAY)
         else:
-            raw_boxes = [(int(x), int(y), int(w_box), int(h_box)) for (x, y, w_box, h_box) in faces]
+            gray = proc_bgr if scale == 1.0 else cv2.resize(frame_bgr, (proc_bgr.shape[1], proc_bgr.shape[0]), interpolation=cv2.INTER_LINEAR)
 
-        # Chromatic skin verification: reject background fabric, curtains, bedsheets, and wall clutter
-        valid_boxes = []
-        for b in raw_boxes:
-            bx, by, bw, bh = b
-            crop = frame_bgr[max(0, by):min(h, by + bh), max(0, bx):min(w, bx + bw)]
-            if self._is_valid_face_candidate(crop):
-                valid_boxes.append(b)
+        def _to_valid_boxes(candidates) -> List[Tuple[int, int, int, int]]:
+            if len(candidates) == 0:
+                return []
+            if scale != 1.0:
+                inv_scale = 1.0 / scale
+                mapped = [
+                    (
+                        int(round(x * inv_scale)),
+                        int(round(y * inv_scale)),
+                        int(round(box_w * inv_scale)),
+                        int(round(box_h * inv_scale)),
+                    )
+                    for (x, y, box_w, box_h) in candidates
+                ]
+            else:
+                mapped = [(int(x), int(y), int(w_box), int(h_box)) for (x, y, w_box, h_box) in candidates]
 
-        return valid_boxes
+            valid = []
+            for b in mapped:
+                bx, by, bw, bh = b
+                crop = frame_bgr[max(0, by):min(h, by + bh), max(0, bx):min(w, bx + bw)]
+                if self._is_valid_face_candidate(crop):
+                    valid.append(b)
+            return valid
+
+        # Pass 1: Primary Alt2 detector (Gentle AdaBoost - centered, symmetrical, pattern-resistant)
+        if self.classifier_alt2 is not None and not self.classifier_alt2.empty():
+            valid_boxes = _to_valid_boxes(
+                self.classifier_alt2.detectMultiScale(
+                    gray,
+                    scaleFactor=self.scale_factor,
+                    minNeighbors=self.min_neighbors,
+                    minSize=scaled_min_size,
+                    flags=cv2.CASCADE_SCALE_IMAGE,
+                )
+            )
+            if valid_boxes:
+                return valid_boxes
+
+        # Pass 2: Frontalface Default detector fallback if Pass 1 yielded no valid faces
+        if self.classifier is not None and not self.classifier.empty():
+            valid_boxes = _to_valid_boxes(
+                self.classifier.detectMultiScale(
+                    gray,
+                    scaleFactor=self.scale_factor,
+                    minNeighbors=self.min_neighbors,
+                    minSize=scaled_min_size,
+                    flags=cv2.CASCADE_SCALE_IMAGE,
+                )
+            )
+            if valid_boxes:
+                return valid_boxes
+
+        # Pass 3: Sensitive fallback across Alt2, Alt, and Default for masked, low-contrast, or dim faces
+        relaxed_neighbors = max(2, self.min_neighbors - 3)
+        relaxed_size = (max(24, int(scaled_min_size[0] * 0.65)), max(24, int(scaled_min_size[1] * 0.65)))
+        for clf in (self.classifier_alt2, self.classifier_alt, self.classifier):
+            if clf is None or clf.empty():
+                continue
+            valid_boxes = _to_valid_boxes(
+                clf.detectMultiScale(
+                    gray,
+                    scaleFactor=1.05,
+                    minNeighbors=relaxed_neighbors,
+                    minSize=relaxed_size,
+                    flags=cv2.CASCADE_SCALE_IMAGE,
+                )
+            )
+            if valid_boxes:
+                return valid_boxes
+
+        # Pass 4: Histogram-equalized sensitive pass for heavy shadows or dark masks
+        gray_eq = cv2.equalizeHist(gray)
+        for clf in (self.classifier_alt2, self.classifier_alt):
+            if clf is None or clf.empty():
+                continue
+            valid_boxes = _to_valid_boxes(
+                clf.detectMultiScale(
+                    gray_eq,
+                    scaleFactor=1.05,
+                    minNeighbors=max(3, relaxed_neighbors),
+                    minSize=relaxed_size,
+                    flags=cv2.CASCADE_SCALE_IMAGE,
+                )
+            )
+            if valid_boxes:
+                return valid_boxes
+
+        return []
 
     def _is_valid_face_candidate(self, crop_bgr: np.ndarray) -> bool:
         """

@@ -1,0 +1,76 @@
+{
+    "model_id": "mobilenetv2",
+    "display_name": "MobileNetV2 (Transfer Learning)",
+    "model_name": "MaskGuard_MobileNetV2",
+    "architecture": "MobileNetV2 (ImageNet Pretrained) + GAP + Dense(128) + Dropout(0.3) + Sigmoid",
+    "backbone": "MobileNetV2 (alpha=1.0, weights=imagenet, include_top=False)",
+    "total_parameters": 2422081,
+    "trainable_parameters": 1512577,
+    "model_sha256": "6b1e334405f9454426a782b24644518876ed33a4725531e2c4c46d3d8d881b30",
+    "model_size_bytes": 22174704,
+    "input_dimensions": [
+        224,
+        224,
+        3
+    ],
+    "input_shape": [
+        224,
+        224,
+        3
+    ],
+    "color_space": "RGB",
+    "preprocessing_method": "tf.keras.applications.mobilenet_v2.preprocess_input: (pixel_val / 127.5) - 1.0 -> [-1.0, 1.0]",
+    "output_activation": "sigmoid",
+    "class_mapping": {
+        "0": "with_mask",
+        "1": "without_mask"
+    },
+    "output_interpretation": {
+        "0": "with_mask (probability close to 0)",
+        "1": "without_mask (probability close to 1)"
+    },
+    "default_threshold": 0.5,
+    "training_configuration": {
+        "stage1_epochs": 2,
+        "stage2_epochs": 2,
+        "selected_stage": "stage2_finetuned",
+        "batch_size": 16,
+        "stage1_lr": 0.0001,
+        "stage2_lr": 1e-05,
+        "unfreeze_last_n": 25,
+        "seed": 42,
+        "total_train_duration_sec": 1542.8,
+        "stage1_best_val_accuracy": 0.9812,
+        "stage2_best_val_accuracy": 0.995
+    },
+    "dataset_information": {
+        "source": "Kaggle ashishjangra27/face-mask-12k-images-dataset",
+        "train_samples": 9828,
+        "val_samples": 800,
+        "test_samples": 992,
+        "leakage_audit": "MD5 cross-split deduplication applied"
+    },
+    "evaluation_provenance": {
+        "model_id": "mobilenetv2",
+        "model_name": "MaskGuard_MobileNetV2",
+        "total_test_samples": 992,
+        "accuracy": 0.995,
+        "test_accuracy": 0.995,
+        "precision": 0.998,
+        "recall": 0.9921,
+        "f1_score": 0.9951,
+        "avg_inference_latency_ms": 228.29,
+        "observed_fps": 4.4,
+        "model_size_mb": 21.15,
+        "false_mask_on_unmasked_count": 4,
+        "unmasked_test_total": 509,
+        "false_mask_on_unmasked_rate": 0.0079,
+        "confusion_matrix": {
+            "true_with_mask": 482,
+            "false_without_mask": 1,
+            "false_with_mask": 4,
+            "true_without_mask": 505
+        },
+        "evaluation_dataset": "Kaggle Face Mask 12K Official Held-out Test Split (MD5 audited, zero overlap)"
+    }
+}

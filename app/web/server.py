@@ -11,13 +11,11 @@ import json
 import logging
 import os
 import sys
-import tempfile
 import threading
-import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 # Ensure project root is on sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -31,22 +29,20 @@ os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
 import cv2
 import numpy as np
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app.core.face_detector import FaceDetector
 from app.core.inference_pipeline import InferencePipeline
-from app.core.mask_classifier import MaskClassifier
+from app.core.model_manager import ModelSelectionError
 from app.core.video_processor import process_video_file
 from app.utils.config import AppConfig
 from app.utils.image_utils import save_image_bgr
 from app.utils.resource_paths import (
     ensure_project_directories,
-    get_dataset_dir,
-    get_model_dir,
+    get_mobilenetv2_dir,
     get_results_dir,
     get_screenshots_dir,
     get_videos_dir,
@@ -118,6 +114,7 @@ video_semaphore = threading.Semaphore(1)
 
 
 class SettingsUpdateRequest(BaseModel):
+    active_model: Optional[str] = None
     confidence_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     face_scale_factor: Optional[float] = Field(default=None, ge=1.01, le=1.5)
     face_min_neighbors: Optional[int] = Field(default=None, ge=1, le=20)
@@ -131,10 +128,17 @@ class SettingsUpdateRequest(BaseModel):
     show_fps: Optional[bool] = None
 
 
+class ModelSelectRequest(BaseModel):
+    model_id: str
+
+
 class FrameDetectionRequest(BaseModel):
     image: str
     return_annotated: bool = False
     save_snapshot: bool = False
+    model_id: Optional[str] = None
+    session_id: Optional[str] = None
+    generation_id: Optional[int] = None
 
 
 def get_or_create_pipeline() -> InferencePipeline:
@@ -147,13 +151,26 @@ def get_or_create_pipeline() -> InferencePipeline:
         return pipeline
 
 
-def require_ready_pipeline() -> InferencePipeline:
-    """Ensure InferencePipeline and underlying CNN model are loaded."""
+def require_ready_pipeline(model_id: Optional[str] = None) -> InferencePipeline:
+    """Ensure InferencePipeline and the requested (or active) model are loaded."""
     pipe = get_or_create_pipeline()
-    if pipe.classifier.model is None:
+    target_mid = model_id or pipe.active_model_id
+    if pipe.model_manager is not None:
+        try:
+            clf = pipe.model_manager.get_classifier(target_mid)
+            if not clf.is_ready():
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Model '{target_mid}' is not loaded or ready.",
+                )
+        except ModelSelectionError as exc:
+            msg = str(exc)
+            status_code = 400 if "Unknown model_id" in msg or "Invalid model_id" in msg else 503
+            raise HTTPException(status_code=status_code, detail=msg)
+    elif pipe.classifier.model is None:
         raise HTTPException(
             status_code=503,
-            detail="MaskGuard CNN model is not loaded. Please train the model with 'python training/train.py' before running inference.",
+            detail="MaskGuard CNN model is not loaded. Please train the model before running inference.",
         )
     return pipe
 
@@ -231,10 +248,10 @@ async def serve_index() -> HTMLResponse:
 @app.get("/api/results/{category}/{filename}")
 async def get_secure_result_file(category: str, filename: str) -> FileResponse:
     """
-    Secure containment endpoint for serving generated screenshots and videos
+    Secure containment endpoint for serving generated screenshots, videos, and model plots
     preventing path traversal attacks.
     """
-    if category not in {"screenshots", "videos", "plots"}:
+    if category not in {"screenshots", "videos", "plots", "mobilenetv2"}:
         raise HTTPException(status_code=400, detail="Invalid result file category.")
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename path.")
@@ -243,6 +260,10 @@ async def get_secure_result_file(category: str, filename: str) -> FileResponse:
         target_dir = get_screenshots_dir()
     elif category == "videos":
         target_dir = get_videos_dir()
+    elif category == "mobilenetv2":
+        if Path(filename).suffix.lower() not in {".png", ".jpg", ".json", ".txt"}:
+            raise HTTPException(status_code=403, detail="Access to model weight files is not allowed.")
+        target_dir = get_mobilenetv2_dir()
     else:
         target_dir = get_results_dir()
 
@@ -253,28 +274,82 @@ async def get_secure_result_file(category: str, filename: str) -> FileResponse:
     return FileResponse(file_path)
 
 
-@app.get("/api/status")
-async def get_system_status() -> Dict[str, Any]:
-    """Retrieve operational status, model metadata, and environment state."""
+@app.get("/api/models")
+async def list_available_models() -> Dict[str, Any]:
+    """List all registered models with availability, load status, and verified metrics."""
     pipe = get_or_create_pipeline()
-    model_path = Path(pipe.classifier.model_path)
-    metadata_path = get_model_dir() / "model_metadata.json"
+    return {
+        "active_model": pipe.active_model_id,
+        "models": pipe.model_manager.list_models() if pipe.model_manager else [],
+    }
 
-    meta: Dict[str, Any] = {}
-    if metadata_path.exists():
-        try:
-            meta = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+
+@app.get("/api/models/active")
+async def get_active_model() -> Dict[str, Any]:
+    """Retrieve currently active model details."""
+    pipe = get_or_create_pipeline()
+    if pipe.model_manager:
+        return pipe.model_manager.get_active_model_info()
+    return {
+        "model_id": pipe.active_model_id,
+        "display_name": getattr(pipe.classifier, "display_name", "Custom CNN"),
+        "loaded": pipe.classifier.is_ready(),
+        "active": True,
+    }
+
+
+@app.post("/api/models/select")
+async def select_active_model(payload: ModelSelectRequest) -> Dict[str, Any]:
+    """
+    Switch the active classification model (`custom_cnn` or `mobilenetv2`),
+    lazy-loading its weights if needed and persisting preference.
+    Never silently falls back on failure.
+    """
+    global config
+    pipe = get_or_create_pipeline()
+    if pipe.model_manager is None:
+        raise HTTPException(status_code=500, detail="DualModelManager unavailable.")
+
+    try:
+        info = pipe.select_model(payload.model_id)
+    except ModelSelectionError as exc:
+        msg = str(exc)
+        status_code = 400 if "Invalid model_id" in msg or "Unknown model_id" in msg else 503
+        raise HTTPException(status_code=status_code, detail=msg)
+
+    cfg = AppConfig.load()
+    cfg.active_model = payload.model_id
+    cfg.save()
+    config = cfg
+    pipe.config = cfg
 
     return {
-        "status": "ready" if pipe.classifier.model is not None else "standby",
-        "model_loaded": pipe.classifier.model is not None,
+        "status": "selected",
+        "active_model": payload.model_id,
+        "model": info,
+    }
+
+
+@app.get("/api/status")
+async def get_system_status() -> Dict[str, Any]:
+    """Retrieve operational status, active model metadata, and environment state."""
+    pipe = get_or_create_pipeline()
+    active_mid = pipe.active_model_id
+    active_info = pipe.model_manager.get_active_model_info() if pipe.model_manager else {}
+    active_clf = pipe.model_manager.get_classifier(active_mid) if (pipe.model_manager and pipe.model_manager.is_ready(active_mid)) else pipe.classifier
+    model_path = Path(active_clf.model_path)
+    meta = pipe.model_manager.load_metadata(active_mid) if pipe.model_manager else {}
+
+    return {
+        "status": "ready" if active_clf.is_ready() else "standby",
+        "active_model": active_mid,
+        "active_model_info": active_info,
+        "model_loaded": active_clf.is_ready(),
         "model_file": model_path.name,
         "model_path": str(model_path),
         "model_size_kb": round(model_path.stat().st_size / 1024, 1) if model_path.exists() else 0,
-        "architecture": meta.get("architecture", "Custom 3-Block CNN"),
-        "total_parameters": meta.get("total_parameters", 110561),
+        "architecture": meta.get("architecture", active_info.get("display_name", "Custom CNN")),
+        "total_parameters": meta.get("total_parameters", 508417),
         "input_shape": meta.get("input_shape", [128, 128, 3]),
         "config": pipe.config.to_dict(),
     }
@@ -283,11 +358,12 @@ async def get_system_status() -> Dict[str, Any]:
 @app.post("/api/detect/frame")
 async def detect_frame(payload: FrameDetectionRequest) -> Dict[str, Any]:
     """
-    Process a single live webcam frame from client canvas.
-    Returns detected bounding boxes, classifications, confidence percentages,
-    tracker IDs, and an annotated image preview.
+    Process a single live webcam frame from client canvas using the specified or active model.
+    Echoes model_id, session_id, and generation_id to prevent stale async mixing during switching.
     """
-    pipe = require_ready_pipeline()
+    target_model_id = payload.model_id
+    pipe = require_ready_pipeline(target_model_id)
+    used_model_id = target_model_id or pipe.active_model_id
     if not payload.image:
         raise HTTPException(status_code=400, detail="Missing 'image' base64 data.")
 
@@ -296,7 +372,10 @@ async def detect_frame(payload: FrameDetectionRequest) -> Dict[str, Any]:
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid image format: {e}")
 
-    annotated_frame, detections, stats = pipe.process_frame(frame_bgr)
+    try:
+        annotated_frame, detections, stats = pipe.process_frame(frame_bgr, model_id=used_model_id)
+    except ModelSelectionError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
     detections_list = []
     for d in detections:
@@ -306,6 +385,7 @@ async def detect_frame(payload: FrameDetectionRequest) -> Dict[str, Any]:
             "confidence": round(float(d.confidence), 4),
             "confidence_pct": round(float(d.confidence) * 100, 1),
             "is_uncertain": d.is_uncertain,
+            "model_id": d.model_id,
             "color_hex": (
                 "#10B981" if d.label == "MASK"
                 else "#EF4444" if d.label == "NO MASK"
@@ -325,7 +405,17 @@ async def detect_frame(payload: FrameDetectionRequest) -> Dict[str, Any]:
         save_image_bgr(snap_path, annotated_frame)
         snapshot_url = f"/results_files/screenshots/{snap_path.name}"
 
+    display_name = (
+        pipe.model_manager.MODEL_DESCRIPTIONS.get(used_model_id, {}).get("display_name", used_model_id)
+        if pipe.model_manager
+        else used_model_id
+    )
+
     return {
+        "model_id": used_model_id,
+        "model_name": display_name,
+        "session_id": payload.session_id,
+        "generation_id": payload.generation_id,
         "faces_count": stats.get("faces_in_frame", len(detections)),
         "mask_count": stats.get("mask_count", 0),
         "no_mask_count": stats.get("nomask_count", 0),
@@ -338,7 +428,11 @@ async def detect_frame(payload: FrameDetectionRequest) -> Dict[str, Any]:
 
 
 @app.post("/api/detect/image")
-async def detect_image(file: UploadFile = File(...)) -> Dict[str, Any]:
+async def detect_image(
+    file: UploadFile = File(...),
+    model_id: Optional[str] = Query(default=None),
+    model_id_form: Optional[str] = Form(default=None, alias="model_id"),
+) -> Dict[str, Any]:
     """
     Secure static image upload handling:
     1. 10 MB size limit with bounded chunk streaming.
@@ -347,7 +441,9 @@ async def detect_image(file: UploadFile = File(...)) -> Dict[str, Any]:
     4. Secure UUID-based output filenames.
     5. Path containment inside screenshots directory.
     """
-    pipe = require_ready_pipeline()
+    selected_model_id = model_id_form or model_id
+    pipe = require_ready_pipeline(selected_model_id)
+    used_model_id = selected_model_id or pipe.active_model_id
 
     # Stream file in bounded chunks to verify size
     chunk_size = 64 * 1024
@@ -388,7 +484,10 @@ async def detect_image(file: UploadFile = File(...)) -> Dict[str, Any]:
             detail=f"Image resolution ({w}x{h} = {w*h} pixels) exceeds maximum limit of {MAX_IMAGE_PIXELS} pixels.",
         )
 
-    annotated_frame, detections, stats = pipe.process_frame(frame_bgr)
+    try:
+        annotated_frame, detections, stats = pipe.process_frame(frame_bgr, model_id=used_model_id)
+    except ModelSelectionError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
     # Secure UUID-based output filename contained within screenshots dir
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -406,6 +505,7 @@ async def detect_image(file: UploadFile = File(...)) -> Dict[str, Any]:
             "confidence": round(float(d.confidence), 4),
             "confidence_pct": round(float(d.confidence) * 100, 1),
             "is_uncertain": d.is_uncertain,
+            "model_id": d.model_id,
             "color_hex": (
                 "#10B981" if d.label == "MASK"
                 else "#EF4444" if d.label == "NO MASK"
@@ -413,10 +513,29 @@ async def detect_image(file: UploadFile = File(...)) -> Dict[str, Any]:
             ),
         })
 
+    # Save accompanying metadata JSON for result provenance
+    meta_out = out_path.with_suffix(".json")
+    try:
+        meta_out.write_text(
+            json.dumps(
+                {
+                    "filename": file.filename,
+                    "model_id": used_model_id,
+                    "faces_count": stats.get("faces_in_frame", len(detections)),
+                    "detections": detections_list,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
     annotated_b64 = bgr_to_base64(annotated_frame, quality=85)
 
     return {
         "filename": file.filename,
+        "model_id": used_model_id,
         "width": w,
         "height": h,
         "faces_count": stats.get("faces_in_frame", len(detections)),
@@ -429,8 +548,13 @@ async def detect_image(file: UploadFile = File(...)) -> Dict[str, Any]:
     }
 
 
-def _process_video_task(job_id: str, input_path: Path, output_path: Path) -> None:
-    """Background sequential video frame processor worker with concurrency lock."""
+def _process_video_task(
+    job_id: str,
+    input_path: Path,
+    output_path: Path,
+    locked_model_id: str,
+) -> None:
+    """Background sequential video frame processor worker locked to `locked_model_id`."""
     with video_semaphore:
         try:
             pipe = get_or_create_pipeline()
@@ -453,6 +577,7 @@ def _process_video_task(job_id: str, input_path: Path, output_path: Path) -> Non
                 pipeline=pipe,
                 progress_callback=on_progress,
                 cancel_check=check_cancelled,
+                model_id=locked_model_id,
             )
 
             if check_cancelled():
@@ -464,7 +589,23 @@ def _process_video_task(job_id: str, input_path: Path, output_path: Path) -> Non
                 if job_id in video_jobs:
                     video_jobs[job_id]["status"] = "completed"
                     video_jobs[job_id]["progress"] = 100.0
+                    video_jobs[job_id]["model_id"] = locked_model_id
                     video_jobs[job_id]["download_url"] = f"/results_files/videos/{final_out_path.name}"
+                    try:
+                        final_out_path.with_suffix(".json").write_text(
+                            json.dumps(
+                                {
+                                    "job_id": job_id,
+                                    "model_id": locked_model_id,
+                                    "total_frames": result.get("total_frames", 0),
+                                    "fps": result.get("fps", 0),
+                                },
+                                indent=2,
+                            ),
+                            encoding="utf-8",
+                        )
+                    except Exception:
+                        pass
         except Exception as e:
             logger.exception("Video processing failed for job %s: %s", job_id, e)
             if job_id in video_jobs:
@@ -480,16 +621,19 @@ def _process_video_task(job_id: str, input_path: Path, output_path: Path) -> Non
 
 
 @app.post("/api/detect/video")
-async def detect_video(background_tasks: BackgroundTasks, file: UploadFile = File(...)) -> Dict[str, Any]:
+async def detect_video(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    model_id: Optional[str] = Query(default=None),
+    model_id_form: Optional[str] = Form(default=None, alias="model_id"),
+) -> Dict[str, Any]:
     """
     Secure video upload and scheduled processing:
-    1. Streaming upload in 1MB chunks to disk up to 250 MB.
-    2. Video container validation.
-    3. Duration and frame resolution check.
-    4. Bounded concurrency queue (1 active processing job).
-    5. Clean temporary raw uploads and error handling.
+    Captures the selected model_id at job start so mid-job UI changes never alter it.
     """
-    require_ready_pipeline()
+    requested_mid = model_id_form or model_id
+    pipe = require_ready_pipeline(requested_mid)
+    locked_model_id = requested_mid or pipe.active_model_id
 
     job_id = uuid.uuid4().hex[:8]
     ext = Path(file.filename or "video.mp4").suffix.lower()
@@ -568,6 +712,7 @@ async def detect_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
     video_jobs[job_id] = {
         "job_id": job_id,
         "filename": file.filename,
+        "model_id": locked_model_id,
         "status": "processing",
         "progress": 0.0,
         "current_frame": 0,
@@ -578,11 +723,12 @@ async def detect_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
         "cancel_requested": False,
     }
 
-    background_tasks.add_task(_process_video_task, job_id, raw_path, processed_path)
+    background_tasks.add_task(_process_video_task, job_id, raw_path, processed_path, locked_model_id)
 
     return {
         "job_id": job_id,
         "filename": file.filename,
+        "model_id": locked_model_id,
         "status": "processing",
         "poll_url": f"/api/video/status/{job_id}",
     }
@@ -612,56 +758,42 @@ async def cancel_video_job(job_id: str) -> Dict[str, Any]:
 
 
 @app.get("/api/analytics")
-async def get_analytics() -> Dict[str, Any]:
+async def get_analytics(model_id: Optional[str] = Query(default=None)) -> Dict[str, Any]:
     """
-    Retrieve genuine test evaluation metrics, confusion matrix, and training curves.
-    Never fabricates or returns hardcoded synthetic metrics.
+    Retrieve genuine test evaluation metrics, confusion matrix, and training curves
+    for the requested (or active) model, plus verified comparison data for both models.
+    Never fabricates or mixes metrics across models.
     """
-    results_dir = get_results_dir()
-    metrics_path = results_dir / "evaluation_metrics.json"
-    report_path = results_dir / "classification_report.txt"
-    metadata_path = get_model_dir() / "model_metadata.json"
+    pipe = get_or_create_pipeline()
+    if pipe.model_manager is None:
+        raise HTTPException(status_code=500, detail="DualModelManager unavailable.")
 
-    metrics: Dict[str, Any] | None = None
-    if metrics_path.exists():
-        try:
-            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
-            if isinstance(metrics, dict) and "accuracy" in metrics and "test_accuracy" not in metrics:
-                metrics["test_accuracy"] = metrics["accuracy"]
-        except Exception:
-            pass
-
-    report_text = ""
-    if report_path.exists():
-        try:
-            report_text = report_path.read_text(encoding="utf-8")
-        except Exception:
-            pass
-
-    metadata: Dict[str, Any] = {}
-    if metadata_path.exists():
-        try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-
-    training_metrics = metadata.get("training_metrics", {})
-    dataset_summary = {
-        "train_samples": training_metrics.get("train_samples", 11202),
-        "val_samples": training_metrics.get("val_samples", 590),
-        "test_samples": training_metrics.get("test_samples", 992),
-        "classes": ["with_mask", "without_mask"],
-    }
-
-    status = "verified" if metrics is not None else "not_evaluated"
+    target_mid = model_id or pipe.active_model_id
+    try:
+        active_analytics = pipe.model_manager.get_model_analytics(target_mid)
+        cnn_analytics = pipe.model_manager.get_model_analytics("custom_cnn")
+        mn_analytics = pipe.model_manager.get_model_analytics("mobilenetv2")
+    except ModelSelectionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     return {
-        "status": status,
-        "metrics": metrics,
-        "classification_report": report_text,
-        "confusion_matrix_url": "/results_files/confusion_matrix.png",
-        "training_curves_url": "/results_files/training_curves.png",
-        "dataset_summary": dataset_summary,
+        **active_analytics,
+        "comparison": {
+            "custom_cnn": {
+                "model_id": "custom_cnn",
+                "display_name": "Custom CNN",
+                "status": cnn_analytics["status"],
+                "metrics": cnn_analytics["metrics"],
+                "metadata": cnn_analytics["metadata"],
+            },
+            "mobilenetv2": {
+                "model_id": "mobilenetv2",
+                "display_name": "MobileNetV2",
+                "status": mn_analytics["status"],
+                "metrics": mn_analytics["metrics"],
+                "metadata": mn_analytics["metadata"],
+            },
+        },
     }
 
 
@@ -679,6 +811,17 @@ async def update_settings(payload: SettingsUpdateRequest) -> Dict[str, Any]:
     """
     global config, pipeline
     cfg = AppConfig.load()
+
+    if payload.active_model is not None:
+        if payload.active_model not in ("custom_cnn", "mobilenetv2"):
+            raise HTTPException(status_code=400, detail=f"Invalid model_id '{payload.active_model}'.")
+        pipe_inst = get_or_create_pipeline()
+        if pipe_inst.model_manager is not None:
+            try:
+                pipe_inst.select_model(payload.active_model)
+            except ModelSelectionError as exc:
+                raise HTTPException(status_code=503, detail=str(exc))
+        cfg.active_model = payload.active_model
 
     if payload.confidence_threshold is not None:
         cfg.confidence_threshold = payload.confidence_threshold
@@ -712,8 +855,7 @@ async def update_settings(payload: SettingsUpdateRequest) -> Dict[str, Any]:
         pipeline.detector.scale_factor = cfg.face_scale_factor
         pipeline.detector.min_neighbors = cfg.face_min_neighbors
         pipeline.detector.padding = cfg.face_padding
-        pipeline.classifier.confidence_threshold = cfg.confidence_threshold
-        pipeline.classifier.uncertain_band = cfg.uncertain_band
+        pipeline.update_thresholds(cfg.confidence_threshold, cfg.uncertain_band)
 
     return {"status": "saved", "config": cfg.to_dict()}
 

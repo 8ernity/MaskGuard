@@ -5,7 +5,6 @@ Unit tests for image preprocessing, validation, normalization, and augmentation.
 from pathlib import Path
 import numpy as np
 import pytest
-import cv2
 
 from app.utils.image_utils import (
     validate_image_file,
@@ -22,7 +21,6 @@ from app.utils.image_utils import (
 from training.prepare_dataset import (
     augment_image,
     load_and_preprocess_image,
-    CLASS_MAP,
 )
 from app.core.mask_classifier import MaskClassifier
 
